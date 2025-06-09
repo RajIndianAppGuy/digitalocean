@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Environment Variables Dashboard</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        background-color: #f4f6f9;
+        color: #333;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+        margin: 0;
+      }
+      .container,
+      .login-container {
+        max-width: 400px;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+        padding: 20px;
+        text-align: center;
+      }
+      .container {
+        display: none;
+      }
+      input[type="text"],
+      input[type="password"],
+      button {
+        width: 100%;
+        padding: 10px;
+        margin: 10px 0;
+        font-size: 16px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+      button {
+        background-color: #4caf50;
+        color: white;
+        cursor: pointer;
+      }
+      button:hover {
+        background-color: #45a049;
+      }
+      .error {
+        color: red;
+        display: none;
+        margin-top: 10px;
+      }
+      .env-var {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        margin-bottom: 10px;
+        border: 1px solid #ddd;
+        padding: 8px;
+        border-radius: 5px;
+        background-color: #f9f9f9;
+      }
+      .env-var input[type="text"] {
+        width: 70%;
+        padding: 5px;
+        font-size: 14px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+      .button-container {
+        margin-top: 20px;
+      }
+      .button-container button {
+        width: 48%;
+        margin: 5px 1%;
+        padding: 10px;
+      }
+      .button-container button.save {
+        background-color: #008cba;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Login Form -->
+    <div class="login-container" id="loginContainer">
+      <h2>Login</h2>
+      <input type="text" id="email" placeholder="Email" required />
+      <input type="password" id="password" placeholder="Password" required />
+      <button onclick="authenticate()">Login</button>
+      <p class="error" id="error">Invalid email or password.</p>
+    </div>
+
+    <!-- Dashboard -->
+    <div class="container" id="dashboardContainer">
+      <h1>Environment Variables Dashboard</h1>
+      <div id="envVars"></div>
+      <div class="button-container">
+        <button class="add" onclick="addNewEnvVar()">Add New Variable</button>
+        <button class="save" onclick="updateEnvVars()">Save Changes</button>
+      </div>
+    </div>
+
+    <script>
+      // Function to authenticate the user
+      async function authenticate() {
+        const email = document.getElementById("email").value;
+        const password = document.getElementById("password").value;
+        const errorElement = document.getElementById("error");
+
+        // Send email and password to the backend for verification
+        const response = await fetch("/api/login", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, password }),
+        });
+
+        const result = await response.json();
+
+        if (response.ok && result.success) {
+          // Hide login form and show dashboard
+          document.getElementById("loginContainer").style.display = "none";
+          document.getElementById("dashboardContainer").style.display = "block";
+          fetchEnvVars(); // Load the environment variables
+        } else {
+          // Show error message
+          errorElement.style.display = "block";
+        }
+      }
+
+      // Function to fetch environment variables from the server
+      async function fetchEnvVars() {
+        const response = await fetch("/api/env");
+        const envVars = await response.json();
+        const envVarsContainer = document.getElementById("envVars");
+        envVarsContainer.innerHTML = "";
+        for (const [key, value] of Object.entries(envVars)) {
+          addEnvVarElement(key, value);
+        }
+      }
+
+      // Function to add an environment variable input
+      function addEnvVarElement(key = "", value = "") {
+        const envVarDiv = document.createElement("div");
+        envVarDiv.classList.add("env-var");
+        envVarDiv.innerHTML = `
+        <input type="text" placeholder="Key" value="${key}" data-key>
+        <input type="text" placeholder="Value" value="${value}" data-value>
+      `;
+        document.getElementById("envVars").appendChild(envVarDiv);
+      }
+
+      // Function to add a new empty environment variable input
+      function addNewEnvVar() {
+        addEnvVarElement();
+      }
+
+      // Function to save environment variables to the server
+      async function updateEnvVars() {
+        const newEnvVars = {};
+        document.querySelectorAll(".env-var").forEach((div) => {
+          const key = div.querySelector("[data-key]").value;
+          const value = div.querySelector("[data-value]").value;
+          if (key) newEnvVars[key] = value;
+        });
+
+        await fetch("/api/env", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ newEnvVars }),
+        });
+        alert("Environment variables updated!");
+      }
+    </script>
+  </body>
+</html>
