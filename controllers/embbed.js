@@ -7,6 +7,7 @@ import {
   storeTextInfo,
   updateTextInfo,
 } from "../supabase/tables.js";
+import tokenTracker from "../utils/tokenTracker.js";
 
 function generateSlug() {
   return (
@@ -17,14 +18,14 @@ function generateSlug() {
   );
 }
 
-async function generateEmbeddingWithRetry(text, maxRetries = 3) {
+async function generateEmbeddingWithRetry(text, maxRetries = 5) {
   for (let i = 0; i < maxRetries; i++) {
     try {
       const response = await axios.post(
         "https://api.openai.com/v1/embeddings",
         {
           input: text,
-          model: "text-embedding-ada-002",
+          model: "text-embedding-3-small",
         },
         {
           headers: {
@@ -41,46 +42,9 @@ async function generateEmbeddingWithRetry(text, maxRetries = 3) {
   }
 }
 
-async function batchStoreEmbeddingsWithRateLimit(
-  embeddings,
-  initialBatchSize = 10,
-  initialDelayMs = 1000
-) {
-  let batchSize = initialBatchSize;
-  let delayMs = initialDelayMs;
-
-  for (let i = 0; i < embeddings.length; i += batchSize) {
-    const batch = embeddings.slice(i, i + batchSize);
-
-    try {
-      await Promise.all(batch.map(storeEmbadding));
-      console.log(`Stored batch ${Math.floor(i / batchSize) + 1}`);
-
-      batchSize = Math.min(batchSize + 1, 50);
-      delayMs = Math.max(delayMs - 100, 500);
-    } catch (error) {
-      console.error(
-        `Error storing batch ${Math.floor(i / batchSize) + 1}:`,
-        error
-      );
-
-      if (error.message.includes("rate limit")) {
-        batchSize = Math.max(Math.floor(batchSize / 2), 1);
-        delayMs = delayMs * 2;
-        i -= batchSize;
-        console.log(
-          `Adjusted batch size to ${batchSize} and delay to ${delayMs}ms`
-        );
-      } else {
-        throw error;
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-}
-
 export default async function embedController(req, res) {
   try {
+    const startTime = Date.now();
     const { url, content, initial } = req.body;
     let text;
 
@@ -128,29 +92,83 @@ export default async function embedController(req, res) {
 
     console.log("Generating embeddings");
     let totalChars = 0;
-    const embeddings = await Promise.all(
-      output.map(async (doc) => {
-        const embedding = await generateEmbeddingWithRetry(doc.pageContent);
-        totalChars += doc.pageContent.length;
-        return {
-          slug: slug,
-          timestamp: timestamp,
-          content: doc.pageContent,
-          embedding: embedding,
-          metadata: doc.metadata,
-        };
-      })
-    );
+    console.log("Output: ", output.length);
+    const embeddings = [];
+    
+    if (output.length <= 500) {
+      // Process small batches in parallel
+      console.log("Processing small batch in parallel");
+      const parallelEmbeddings = await Promise.all(
+        output.map(async (doc, i) => {
+          console.log("Generating embedding for chunk: ", i);
+          const embedding = await generateEmbeddingWithRetry(doc.pageContent);
+          totalChars += doc.pageContent.length;
+          return {
+            slug: slug,
+            timestamp: timestamp,
+            content: doc.pageContent,
+            embedding: embedding,
+            metadata: doc.metadata,
+          };
+        })
+      );
+      embeddings.push(...parallelEmbeddings);
+    } else {
+      // Process large batches in chunks of 300
+      console.log("Processing large batch in chunks of 300");
+      const chunkSize = 300;
+      const totalChunks = Math.ceil(output.length / chunkSize);
+      
+      for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
+        console.log(`Processing chunk ${chunkIndex + 1} of ${totalChunks}`);
+        const start = chunkIndex * chunkSize;
+        const end = Math.min(start + chunkSize, output.length);
+        const currentChunk = output.slice(start, end);
+        
+        // Process current chunk in parallel
+        const chunkEmbeddings = await Promise.all(
+          currentChunk.map(async (doc, i) => {
+            const actualIndex = start + i;
+            console.log(`Generating embedding for chunk: ${actualIndex}`);
+            const embedding = await generateEmbeddingWithRetry(doc.pageContent);
+            totalChars += doc.pageContent.length;
+            return {
+              slug: slug,
+              timestamp: timestamp,
+              content: doc.pageContent,
+              embedding: embedding,
+              metadata: doc.metadata,
+            };
+          })
+        );
+        embeddings.push(...chunkEmbeddings);
+      }
+    }
 
     const estimatedTokens = Math.round(totalChars / 4); // Approx 4 chars = 1 token
     const estimatedCost = (estimatedTokens / 1000) * 0.0001;
+
+    // Add embedding tokens to the token tracker
+    tokenTracker.addUsage({
+      data: {
+        usage: {
+          prompt_tokens: estimatedTokens,
+          completion_tokens: 0,
+          total_tokens: estimatedTokens
+        }
+      }
+    }, "ext-embedding-3-small");
 
     console.log("Total Chars:", totalChars);
     console.log("Estimated Tokens:", estimatedTokens);
     console.log("Estimated Cost ($):", estimatedCost.toFixed(6));
 
     console.log("Storing embeddings");
-    await batchStoreEmbeddingsWithRateLimit(embeddings);
+    await Promise.all(
+      embeddings.map(async (embedding, index) => {
+        await storeEmbadding(embedding);
+      })
+    );
 
     const urlInfo = {
       slug: slug,
@@ -163,12 +181,16 @@ export default async function embedController(req, res) {
       await storeTextInfo(urlInfo);
     }
 
+    const totalTime = (Date.now() - startTime) / 1000;
+    console.log(`Total time taken for embedding and storing: ${totalTime} seconds`);
+
     res.status(201).json({
       status: "success",
       message: "Page Embedded successfully",
       slug: slug,
       tokens: estimatedTokens,
       cost: estimatedCost.toFixed(6),
+      totalTime: totalTime
     });
   } catch (error) {
     console.error("Error processing request:", error);

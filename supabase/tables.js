@@ -28,15 +28,12 @@ export async function checkEmbaddingExists(url) {
 export async function storeEmbadding(supabaseInput) {
   // Store embadding in supabase
   try {
-    const { data, error } = await supabase
+    await supabase
       .from("ms_documents")
       .insert(supabaseInput);
 
-    if (error) {
-      console.log("Supabase Error: ", error);
-    }
   } catch (error) {
-    console.log("Supabase Calling Error: ", error);
+    // console.log("Supabase Calling Error: ", error);
   }
 }
 

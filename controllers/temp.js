@@ -7,7 +7,7 @@ import {
   highlightElement,
 } from "../utils/helper.js";
 import { updateTest, fetchTest } from "../supabase/tables.js";
-import TokenTracker from "../utils/tokenTracker.js";
+import tokenTracker from "../utils/tokenTracker.js";
 import { Resend } from "resend";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
@@ -16,6 +16,8 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 function deepClone(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
+
+
 
 // Capture and store a screenshot
 async function captureAndStoreScreenshot(page, testId, stepId) {
@@ -53,8 +55,7 @@ async function executeImportedTest(
   testId,
   logs,
   stepResults,
-  addLog,
-  tokenTracker
+  addLog
 ) {
   console.log(`Starting imported test execution ${testId},`);
   const importedTest = await fetchTest(importedTestId);
@@ -74,8 +75,7 @@ async function executeImportedTest(
       logs,
       stepResults,
       true,
-      addLog,
-      tokenTracker
+      addLog
     );
 
     addLog(`Completed imported test: ${importedTest.name}`, "success");
@@ -94,8 +94,7 @@ async function executeSteps(
   logs,
   screenShots,
   isReusable = false,
-  addLog,
-  tokenTracker
+  addLog
 ) {
   let currentUrl = startUrl;
   let count = 0;
@@ -181,9 +180,7 @@ async function executeSteps(
             const initialClickSelector = await getSelector(
               step,
               name,
-              clickImage,
-              '',
-              tokenTracker
+              clickImage
             );
             step.selector = initialClickSelector.selector;
             delete step.chunk;
@@ -217,8 +214,7 @@ async function executeSteps(
             name,
             'click',
             screenshotUrlBeforeClick,
-            '',
-            tokenTracker
+            ''
           );
 
           await page.waitForTimeout(4000);
@@ -246,9 +242,7 @@ async function executeSteps(
             const initialFillSelector = await getSelector(
               step,
               name,
-              inputImage,
-              '',
-              tokenTracker
+              inputImage
             );
             step.selector = initialFillSelector.selector;
             delete step.chunk;
@@ -282,8 +276,7 @@ async function executeSteps(
             name,
             'fill',
             screenshotUrlbeforeInput,
-            '',
-            tokenTracker
+            ''
           );
 
           const screenshotUrlAfterInput = await captureAndStoreScreenshot(
@@ -305,8 +298,7 @@ async function executeSteps(
           );
           const analysisResult = await analyzeScreenshot(
             screenshotUrl,
-            step.question,
-            tokenTracker
+            step.question
           );
           console.log(analysisResult);
           screenShots.push(screenshotUrl);
@@ -341,8 +333,7 @@ async function executeSteps(
               testId,
               logs,
               steps,
-              addLog,
-              tokenTracker
+              addLog
             );
           } else {
             addLog(`Skipping nested import of reusable test to prevent recursion`, "warning");
@@ -372,7 +363,6 @@ export default async function RunScenario(req, res) {
   let browser;
   let logs = [];
   let screenShots = [];
-  const tokenTracker = new TokenTracker(); // Create new instance for this request
 
   try {
     let { startUrl, name, steps, testId, email } = req.body;
@@ -433,8 +423,7 @@ export default async function RunScenario(req, res) {
         logs,
         screenShots,
         false,
-        addLog,
-        tokenTracker
+        addLog
       );
 
       // Get token usage and cost
@@ -574,8 +563,7 @@ async function performWithRetry(
   name,
   type,
   screenshot,
-  err,
-  tokenTracker
+  err
 ) {
   let errmsg = "";
 
@@ -627,8 +615,7 @@ async function performWithRetry(
             step,
             name,
             screenshot,
-            errmsg,
-            tokenTracker
+            errmsg
           );
           step.selector = selectorObject.selector;
         } catch (errormsg) {

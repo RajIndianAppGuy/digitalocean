@@ -1,5 +1,5 @@
 import axios from "axios";
-import tokenTracker from "./tokenTracker.js";
+import TokenTracker from "./tokenTracker.js";
 import {
   CreatePlaywrightSelector,
   extensionMessageToOpenAI,
@@ -7,7 +7,7 @@ import {
 } from "./prompt.js";
 import openai from "../config/openai.js";
 
-export const getSelector = async (step, name, screenshotUrl, err) => {
+export const getSelector = async (step, name, screenshotUrl, err, tokenTracker) => {
   let userMessage = userMessageToOpenAI(step, step.chunk, name, err);
 
   const funcitonTools = CreatePlaywrightSelector();

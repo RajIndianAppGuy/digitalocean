@@ -1,7 +1,7 @@
 import axios from "axios";
-import tokenTracker from "../utils/tokenTracker.js";
+import TokenTracker from "../utils/tokenTracker.js";
 
-export async function analyzeScreenshot(screenshotUrl, question) {
+export async function analyzeScreenshot(screenshotUrl, question, tokenTracker) {
   question =
     question + "only answer in true or false dont elaborate your answer";
   try {
