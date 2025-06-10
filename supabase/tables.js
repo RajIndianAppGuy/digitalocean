@@ -26,14 +26,39 @@ export async function checkEmbaddingExists(url) {
 }
 
 export async function storeEmbadding(supabaseInput) {
-  // Store embadding in supabase
-  try {
-    await supabase
-      .from("ms_documents")
-      .insert(supabaseInput);
+  const maxRetries = 5;
+  const baseDelay = 1000; // 1 second
 
-  } catch (error) {
-    // console.log("Supabase Calling Error: ", error);
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const { data, error } = await supabase
+        .from("ms_documents")
+        .insert(supabaseInput);
+
+      if (error) {
+        console.log(`Supabase Error (Attempt ${attempt}/${maxRetries}):`, error);
+        
+        // If it's a timeout error and we haven't reached max retries, wait and retry
+        if (error.code === '57014' && attempt < maxRetries) {
+          const delay = baseDelay * Math.pow(2, attempt - 1); // Exponential backoff
+          console.log(`Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        throw error;
+      }
+
+      return data;
+    } catch (error) {
+      if (attempt === maxRetries) {
+        console.log("Supabase Calling Error (Final attempt):", error);
+        throw error;
+      }
+      // For other errors, continue with retry
+      const delay = baseDelay * Math.pow(2, attempt - 1);
+      console.log(`Retrying in ${delay}ms due to error:`, error.message);
+      await new Promise(resolve => setTimeout(resolve, delay));
+    }
   }
 }
 
@@ -91,26 +116,46 @@ export async function updateTextInfo(oldSlug, newSlug) {
 }
 
 export async function checkEmbadding(embadding, slug) {
-  try {
-    const matchCount = 5;
+  const maxRetries = 5;
+  const baseDelay = 1000; // 1 second
 
-    const { data, error } = await supabase.rpc("match_documents_by_slug", {
-      match_count: matchCount,
-      query_embedding: embadding,
-      slug_search: slug,
-    });
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const matchCount = 5;
 
-    if (error) {
-      console.log("Supabase Embadding Checking Internal Error: ", error);
+      const { data, error } = await supabase.rpc("match_documents_by_slug", {
+        match_count: matchCount,
+        query_embedding: embadding,
+        slug_search: slug,
+      });
+
+      if (error) {
+        console.log(`Supabase Embadding Checking Internal Error (Attempt ${attempt}/${maxRetries}):`, error);
+        
+        // If it's a timeout error and we haven't reached max retries, wait and retry
+        if (error.code === '57014' && attempt < maxRetries) {
+          const delay = baseDelay * Math.pow(2, attempt - 1); // Exponential backoff
+          console.log(`Retrying in ${delay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, delay));
+          continue;
+        }
+        throw error;
+      }
+
+      return data;
+    } catch (error) {
+      if (attempt === maxRetries) {
+        console.log("Supabase Embadding Checking Error (Final attempt):", error);
+        throw error;
+      }
+      // For other errors, continue with retry
+      const delay = baseDelay * Math.pow(2, attempt - 1);
+      console.log(`Retrying in ${delay}ms due to error:`, error.message);
+      await new Promise(resolve => setTimeout(resolve, delay));
     }
-
-    // console.log("data is : ", data);
-
-    return data;
-  } catch (error) {
-    console.log("Supabase Embadding Checking Error: ", error);
   }
 }
+
 export async function deleteEmbeddingsBySlug(slug) {
   try {
     const { data, error } = await supabase
