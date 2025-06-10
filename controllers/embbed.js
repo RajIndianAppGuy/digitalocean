@@ -7,7 +7,7 @@ import {
   storeTextInfo,
   updateTextInfo,
 } from "../supabase/tables.js";
-import tokenTracker from "../utils/tokenTracker.js";
+import TokenTracker from "../utils/tokenTracker.js";
 
 function generateSlug() {
   return (
@@ -43,6 +43,8 @@ async function generateEmbeddingWithRetry(text, maxRetries = 5) {
 }
 
 export default async function embedController(req, res) {
+  const tokenTracker = new TokenTracker(); // Create new instance for this request
+  
   try {
     const startTime = Date.now();
     const { url, content, initial } = req.body;
@@ -157,7 +159,7 @@ export default async function embedController(req, res) {
           total_tokens: estimatedTokens
         }
       }
-    }, "ext-embedding-3-small");
+    }, "text-embedding-3-small");
 
     console.log("Total Chars:", totalChars);
     console.log("Estimated Tokens:", estimatedTokens);
