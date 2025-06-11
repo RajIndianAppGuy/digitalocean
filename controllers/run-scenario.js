@@ -33,6 +33,9 @@ async function captureAndStoreScreenshot(page, testId, stepId) {
       testId,
       stepId,
       screenshotData: base64Screenshot,
+    },{
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
     });
 
     console.log("Screenshot Captured");
@@ -52,7 +55,6 @@ async function executeImportedTest(
   importedTestId,
   testId,
   logs,
-  stepResults,
   addLog,
   tokenTracker
 ) {
@@ -60,6 +62,8 @@ async function executeImportedTest(
   const importedTest = await fetchTest(importedTestId);
   if (importedTest) {
     addLog(`Executing imported test: ${importedTest.name}`, "info");
+
+    const importedTestScreenshots = [];
 
     // Clone the imported test's steps to avoid modifying main test steps
     const clonedImportedSteps = deepClone(importedTest.steps);
@@ -72,13 +76,18 @@ async function executeImportedTest(
       page.url(),
       importedTest.name,
       logs,
-      stepResults,
+      importedTestScreenshots,
       true,
       addLog,
       tokenTracker
     );
 
     addLog(`Completed imported test: ${importedTest.name}`, "success");
+
+    return {
+      screenshots: importedTestScreenshots,
+      steps: clonedImportedSteps
+    };
   } else {
     addLog(`Failed to import test: ${importedTestId}`, "error");
   }
@@ -335,15 +344,16 @@ async function executeSteps(
         case "Import Reusable Test":
           if (!isReusable) {
             // Execute the imported test independently without mutating the main steps
-            await executeImportedTest(
+            const importResult = await executeImportedTest(
               page,
               step.importedTestId,
               testId,
               logs,
-              steps,
               addLog,
               tokenTracker
             );
+
+            screenShots.push(...importResult.screenshots);
           } else {
             addLog(`Skipping nested import of reusable test to prevent recursion`, "warning");
           }
@@ -409,10 +419,6 @@ export default async function RunScenario(req, res) {
     browser = await chromium.launch({ headless: true, slowMo: 50 });
     const context = await browser.newContext();
     const page = await context.newPage();
-
-    if(email == "raj@indianappguy.com"){
-      email = "rajdama1729@gmail.com"
-    }
 
     try {
       await page.goto(startUrl, { timeout: 900000 });
