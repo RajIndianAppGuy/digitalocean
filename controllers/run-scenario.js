@@ -227,7 +227,10 @@ async function executeSteps(
             'click',
             screenshotUrlBeforeClick,
             '',
-            tokenTracker
+            tokenTracker,
+            screenShots,
+            testId,
+            clonedSteps
           );
 
           await page.waitForTimeout(4000);
@@ -292,7 +295,10 @@ async function executeSteps(
             'fill',
             screenshotUrlbeforeInput,
             '',
-            tokenTracker
+            tokenTracker,
+            screenShots,
+            testId,
+            clonedSteps
           );
 
           const screenshotUrlAfterInput = await captureAndStoreScreenshot(
@@ -581,12 +587,40 @@ async function performWithRetry(
   type,
   screenshot,
   err,
-  tokenTracker
+  tokenTracker,
+  screenShots,
+  testId,
+  clonedSteps
 ) {
   let errmsg = "";
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
+      // Validate selector before proceeding
+      if (!step.selector || step.selector.trim() === '') {
+        console.log('Empty selector detected, fetching new selector...');
+        const selectorObject = await getSelector(
+          step,
+          name,
+          screenshot,
+          errmsg,
+          tokenTracker
+        );
+        step.selector = selectorObject.selector;
+        step.cache = false;
+      }
+
+      // Capture screenshot before action
+      const screenshotBeforeAction = await captureAndStoreScreenshot(
+        page,
+        testId,
+        step.id
+      );
+      screenShots.push(screenshotBeforeAction);
+
+      // Highlight the element before performing action
+      await highlightElement(page, step.selector);
+
       // Modified to handle multiple elements by selecting the visible one
       const elements = await page.locator(step.selector).all();
       if (elements.length > 1) {
@@ -618,9 +652,35 @@ async function performWithRetry(
           // Try clicking the first element after making it visible
           await elements[0].click();
         }
+      } else if (elements.length === 0) {
+        throw new Error(`No elements found matching selector: ${step.selector}`);
       } else {
         await action(step.selector);
       }
+
+      // Capture screenshot after action
+      const screenshotAfterAction = await captureAndStoreScreenshot(
+        page,
+        testId,
+        step.id
+      );
+      screenShots.push(screenshotAfterAction);
+
+      // Update cache after successful action
+      step.cache = true;
+      
+      // Update the cache in the main steps array
+      const stepIndex = clonedSteps.findIndex(s => s.id === step.id);
+      if (stepIndex !== -1) {
+        clonedSteps[stepIndex].cache = true;
+        clonedSteps[stepIndex].selector = step.selector;
+        // Update the test in the database with the new cache status
+        await updateTest(testId, clonedSteps);
+      }
+      
+      // Wait for a short time to ensure the action is complete
+      await page.waitForTimeout(1000);
+
       return step; // If action succeeds, return the updated step
     } catch (error) {
       console.error(
@@ -636,10 +696,23 @@ async function performWithRetry(
             errmsg,
             tokenTracker
           );
+          if (!selectorObject || !selectorObject.selector) {
+            throw new Error('Failed to get valid selector from getSelector');
+          }
           step.selector = selectorObject.selector;
+          // Reset cache when retrying with new selector
+          step.cache = false;
+          
+          // Update the cache in the main steps array
+          const stepIndex = clonedSteps.findIndex(s => s.id === step.id);
+          if (stepIndex !== -1) {
+            clonedSteps[stepIndex].cache = false;
+            clonedSteps[stepIndex].selector = step.selector;
+          }
         } catch (errormsg) {
           errmsg = errormsg;
           console.error(`Failed to re-fetch selector`, errormsg);
+          throw new Error(`Failed to get valid selector after ${attempt} attempts: ${errormsg.message}`);
         }
       } else {
         throw new Error(
