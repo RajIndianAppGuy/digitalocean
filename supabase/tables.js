@@ -322,3 +322,56 @@ export async function storeTest(newTestName, newTestUrl, email) {
     // Handle the error (e.g., show an error message to the user)
   }
 }
+
+export async function createStreamRun(runId) {
+  try {
+    const { data, error } = await supabase
+      .from("stream_run")
+      .insert({
+        run_id: runId,
+        logs: [],
+        screenshot: null
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error("Error creating stream run:", error);
+    throw error;
+  }
+}
+
+export async function updateStreamRun(runId, updateData) {
+  try {
+    const { data, error } = await supabase
+      .from("stream_run")
+      .update(updateData)
+      .eq("run_id", runId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error("Error updating stream run:", error);
+    throw error;
+  }
+}
+
+export async function getStreamRun(runId) {
+  try {
+    const { data, error } = await supabase
+      .from("stream_run")
+      .select("*")
+      .eq("run_id", runId)
+      .single();
+
+    if (error) throw error;
+    return data;
+  } catch (error) {
+    console.error("Error getting stream run:", error);
+    throw error;
+  }
+}
