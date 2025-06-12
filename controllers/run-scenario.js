@@ -6,7 +6,7 @@ import {
   getSelector,
   highlightElement,
 } from "../utils/helper.js";
-import { updateTest, fetchTest } from "../supabase/tables.js";
+import { updateTest, fetchTest, createStreamRun, updateStreamRun } from "../supabase/tables.js";
 import TokenTracker from "../utils/tokenTracker.js";
 import { Resend } from "resend";
 
@@ -18,7 +18,7 @@ function deepClone(obj) {
 }
 
 // Capture and store a screenshot
-async function captureAndStoreScreenshot(page, testId, stepId) {
+async function captureAndStoreScreenshot(page, testId, stepId, runId) {
   try {
     const screenshotBuffer = await page.screenshot({
       fullPage: false,
@@ -39,6 +39,10 @@ async function captureAndStoreScreenshot(page, testId, stepId) {
     });
 
     console.log("Screenshot Captured");
+    
+    // Update screenshot in Supabase
+    await updateStreamRun(runId, { screenshot: response.data.screenshotUrl });
+    
     return response.data.screenshotUrl;
   } catch (error) {
     console.error(
@@ -56,7 +60,8 @@ async function executeImportedTest(
   testId,
   logs,
   addLog,
-  tokenTracker
+  tokenTracker,
+  runId
 ) {
   console.log(`Starting imported test execution ${testId},`);
   const importedTest = await fetchTest(importedTestId);
@@ -79,7 +84,8 @@ async function executeImportedTest(
       importedTestScreenshots,
       true,
       addLog,
-      tokenTracker
+      tokenTracker,
+      runId
     );
 
     addLog(`Completed imported test: ${importedTest.name}`, "success");
@@ -104,7 +110,8 @@ async function executeSteps(
   screenShots,
   isReusable = false,
   addLog,
-  tokenTracker
+  tokenTracker,
+  runId
 ) {
   let currentUrl = startUrl;
   let count = 0;
@@ -184,7 +191,8 @@ async function executeSteps(
           const clickImage = await captureAndStoreScreenshot(
             page,
             testId,
-            step.id
+            step.id,
+            runId
           );
           if (!step.cache) {
             const initialClickSelector = await getSelector(
@@ -212,7 +220,8 @@ async function executeSteps(
           const screenshotUrlBeforeClick = await captureAndStoreScreenshot(
             page,
             testId,
-            step.id
+            step.id,
+            runId
           );
 
           screenShots.push(screenshotUrlBeforeClick);
@@ -230,7 +239,8 @@ async function executeSteps(
             tokenTracker,
             screenShots,
             testId,
-            clonedSteps
+            clonedSteps,
+            runId
           );
 
           await page.waitForTimeout(4000);
@@ -238,7 +248,8 @@ async function executeSteps(
           const screenshotUrlAfterClick = await captureAndStoreScreenshot(
             page,
             testId,
-            step.id
+            step.id,
+            runId
           );
 
           screenShots.push(screenshotUrlAfterClick);
@@ -252,7 +263,8 @@ async function executeSteps(
           const inputImage = await captureAndStoreScreenshot(
             page,
             testId,
-            step.id
+            step.id,
+            runId
           );
           if (!step.cache) {
             const initialFillSelector = await getSelector(
@@ -276,7 +288,8 @@ async function executeSteps(
           const screenshotUrlbeforeInput = await captureAndStoreScreenshot(
             page,
             testId,
-            step.id
+            step.id,
+            runId
           );
 
             await highlightElement(
@@ -298,13 +311,15 @@ async function executeSteps(
             tokenTracker,
             screenShots,
             testId,
-            clonedSteps
+            clonedSteps,
+            runId
           );
 
           const screenshotUrlAfterInput = await captureAndStoreScreenshot(
             page,
             testId,
-            step.id
+            step.id,
+            runId
           );
 
           screenShots.push(screenshotUrlAfterInput);
@@ -316,7 +331,8 @@ async function executeSteps(
           const screenshotUrl = await captureAndStoreScreenshot(
             page,
             testId,
-            step.id
+            step.id,
+            runId
           );
           const analysisResult = await analyzeScreenshot(
             screenshotUrl,
@@ -334,13 +350,15 @@ async function executeSteps(
           const screenshotUrlBeforeDelay = await captureAndStoreScreenshot(
             page,
             testId,
-            step.id
+            step.id,
+            runId
           );
           await page.waitForTimeout(step.delayTime);
           const screenshotUrlAfterDelay = await captureAndStoreScreenshot(
             page,
             testId,
-            step.id
+            step.id,
+            runId
           );
           addLog("Wait completed", "success");
           screenShots.push(screenshotUrlBeforeDelay);
@@ -356,7 +374,8 @@ async function executeSteps(
               testId,
               logs,
               addLog,
-              tokenTracker
+              tokenTracker,
+              runId
             );
 
             screenShots.push(...importResult.screenshots);
@@ -391,10 +410,15 @@ export default async function RunScenario(req, res) {
   const tokenTracker = new TokenTracker(); // Create new instance for this request
 
   try {
-    let { startUrl, name, steps, testId, email } = req.body;
+    let { startUrl, name, steps, testId, email, runId } = req.body;
 
-    const addLog = (message, status) => {
-      logs.push({
+
+
+    // Initialize stream run in Supabase
+    await createStreamRun(runId);
+
+    const addLog = async (message, status) => {
+      const logEntry = {
         message,
         status,
         timestamp: new Date().toLocaleString('en-US', {
@@ -406,7 +430,12 @@ export default async function RunScenario(req, res) {
           second: '2-digit',
           hour12: true
         })
-      });
+      };
+      
+      logs.push(logEntry);
+      
+      // Update logs in Supabase
+      await updateStreamRun(runId, { logs: [logEntry] });
     };
 
     addLog(`Starting scenario: ${name}`, "info");
@@ -418,6 +447,7 @@ export default async function RunScenario(req, res) {
         message: "Something is missing",
         logs,
         screenShots,
+        runId // Include runId in response
       });
     }
 
@@ -446,7 +476,8 @@ export default async function RunScenario(req, res) {
         screenShots,
         false,
         addLog,
-        tokenTracker
+        tokenTracker,
+        runId
       );
 
       // Get token usage and cost
@@ -545,6 +576,7 @@ export default async function RunScenario(req, res) {
         screenShots,
         logs,
         steps: executedSteps,
+        runId, // Include runId in response
         tokenUsage: {
           totalTokens: tokenUsage.totalTokens,
           promptTokens: tokenUsage.promptTokens,
@@ -560,6 +592,7 @@ export default async function RunScenario(req, res) {
         message: `Error during test execution: ${error.message}`,
         logs,
         screenShots,
+        runId // Include runId in error response
       });
     } finally {
       if (page) await page.close();
@@ -573,6 +606,7 @@ export default async function RunScenario(req, res) {
       message: `Something went wrong in run scenario: ${error.message}`,
       screenShots,
       logs,
+      runId // Include runId in error response
     });
   }
 }
@@ -590,7 +624,8 @@ async function performWithRetry(
   tokenTracker,
   screenShots,
   testId,
-  clonedSteps
+  clonedSteps,
+  runId
 ) {
   let errmsg = "";
 
@@ -614,7 +649,8 @@ async function performWithRetry(
       const screenshotBeforeAction = await captureAndStoreScreenshot(
         page,
         testId,
-        step.id
+        step.id,
+        runId
       );
       screenShots.push(screenshotBeforeAction);
 
@@ -662,7 +698,8 @@ async function performWithRetry(
       const screenshotAfterAction = await captureAndStoreScreenshot(
         page,
         testId,
-        step.id
+        step.id,
+        runId
       );
       screenShots.push(screenshotAfterAction);
 
