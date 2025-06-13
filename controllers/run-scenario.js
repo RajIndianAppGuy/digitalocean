@@ -152,7 +152,19 @@ async function executeSteps(
     ) {
       currentUrl = page.url();
       try {
+        // Send streaming update for reading page
+        if (global.testStreams && global.testStreams.has(testId)) {
+          const stream = global.testStreams.get(testId);
+          stream.write(`data: ${JSON.stringify({ type: 'status', message: 'Reading page content...' })}\n\n`);
+        }
+
         const content = await getFullyRenderedContent(currentUrl);
+
+        // Send streaming update for generating embeddings
+        if (global.testStreams && global.testStreams.has(testId)) {
+          const stream = global.testStreams.get(testId);
+          stream.write(`data: ${JSON.stringify({ type: 'status', message: 'Generating embeddings...' })}\n\n`);
+        }
 
         const res1 = await axios.post(
           `${process.env.DOMAIN_NAME}/embbeding`,
@@ -170,6 +182,12 @@ async function executeSteps(
             step.actionType === "Click Element"
               ? step.details.element
               : step.details.description;
+
+          // Send streaming update for finding chunks
+          if (global.testStreams && global.testStreams.has(testId)) {
+            const stream = global.testStreams.get(testId);
+            stream.write(`data: ${JSON.stringify({ type: 'status', message: 'Finding relevant elements...' })}\n\n`);
+          }
 
           const res2 = await axios.post(
             `${process.env.DOMAIN_NAME}/findChunks`,
