@@ -6,7 +6,7 @@ import {
   getSelector,
   highlightElement,
 } from "../utils/helper.js";
-import { updateTest, fetchTest, createStreamRun, updateStreamRun, updateTestStatus } from "../supabase/tables.js";
+import { updateTest, fetchTest, createStreamRun, updateStreamRun } from "../supabase/tables.js";
 import TokenTracker from "../utils/tokenTracker.js";
 import { Resend } from "resend";
 
@@ -152,20 +152,7 @@ async function executeSteps(
     ) {
       currentUrl = page.url();
       try {
-        // Send streaming update for reading page
-        if (global.testStreams && global.testStreams.has(testId)) {
-          const stream = global.testStreams.get(testId);
-          stream.write(`data: ${JSON.stringify({ type: 'status', message: 'Reading page content...' })}\n\n`);
-        }
-
         const content = await getFullyRenderedContent(currentUrl);
-
-        // Send streaming update for generating embeddings
-        if (global.testStreams && global.testStreams.has(testId)) {
-          const stream = global.testStreams.get(testId);
-          stream.write(`data: ${JSON.stringify({ type: 'status', message: 'Generating embeddings...' })}\n\n`);
-        }
-
         const res1 = await axios.post(
           `${process.env.DOMAIN_NAME}/embbeding`,
           { content, url: currentUrl },
@@ -182,13 +169,6 @@ async function executeSteps(
             step.actionType === "Click Element"
               ? step.details.element
               : step.details.description;
-
-          // Send streaming update for finding chunks
-          if (global.testStreams && global.testStreams.has(testId)) {
-            const stream = global.testStreams.get(testId);
-            stream.write(`data: ${JSON.stringify({ type: 'status', message: 'Finding relevant elements...' })}\n\n`);
-          }
-
           const res2 = await axios.post(
             `${process.env.DOMAIN_NAME}/findChunks`,
             { slug, text },
@@ -432,9 +412,10 @@ export default async function RunScenario(req, res) {
   try {
     let { startUrl, name, steps, testId, email, runId } = req.body;
 
+
+
     // Initialize stream run in Supabase
     await createStreamRun(runId);
-    await updateTestStatus(testId, 'running');
 
     const addLog = async (message, status) => {
       const logEntry = {
@@ -461,15 +442,12 @@ export default async function RunScenario(req, res) {
 
     if (!startUrl || !steps || !name) {
       addLog("Error: Missing required parameters", "error");
-      await updateTestStatus(testId, 'failed', 'Missing required parameters');
-      // Send failure email
-      await sendFailureEmail(email, name, testId, logs, "Missing required parameters");
       return res.status(404).json({
         status: "error",
         message: "Something is missing",
         logs,
         screenShots,
-        runId
+        runId // Include runId in response
       });
     }
 
@@ -506,18 +484,99 @@ export default async function RunScenario(req, res) {
       const tokenUsage = tokenTracker.getUsage();
       console.log(tokenUsage);
 
-      // Update test status to success
-      await updateTestStatus(testId, 'completed');
-      
-      // Send success email
-      await sendSuccessEmail(email, name, testId, logs, screenShots, tokenUsage);
+      // Create a more attractive email template
+      const getStatusColor = (status) => {
+        switch(status) {
+          case 'success': return '#4CAF50';
+          case 'error': return '#f44336';
+          case 'warning': return '#ff9800';
+          case 'info': return '#2196F3';
+          default: return '#757575';
+        }
+      };
+
+      const getStatusIcon = (status) => {
+        switch(status) {
+          case 'success': return '✅';
+          case 'error': return '❌';
+          case 'warning': return '⚠️';
+          case 'info': return 'ℹ️';
+          default: return '•';
+        }
+      };
+
+      const formatTimestamp = () => {
+        const now = new Date();
+        return now.toLocaleString('en-US', {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true
+        });
+      };
+
+      const emailTemplate = `
+        <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
+          <div style="background-color: #2196F3; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
+            <h1 style="margin: 0;">Test Execution Report</h1>
+            <p style="margin: 5px 0 0 0;">${name}</p>
+          </div>
+          
+          <div style="background-color: white; padding: 20px; border-radius: 0 0 5px 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+            <div style="margin-bottom: 20px;">
+              <h2 style="color: #333; margin-bottom: 10px;">Execution Summary</h2>
+              <p style="margin: 5px 0;"><strong>Test ID:</strong> ${testId}</p>
+              <p style="margin: 5px 0;"><strong>Start URL:</strong> ${startUrl}</p>
+              <p style="margin: 5px 0;"><strong>Execution Time:</strong> ${logs[0].timestamp}</p>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+              <h2 style="color: #333; margin-bottom: 10px;">Token Usage</h2>
+              <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px;">
+                <p style="margin: 5px 0;"><strong>Total Tokens:</strong> ${tokenUsage.totalTokens}</p>
+                <p style="margin: 5px 0;"><strong>Estimated Cost:</strong> $${tokenUsage.cost}</p>
+                <p style="margin: 5px 0;"><strong>Model Used:</strong> ${tokenUsage.model}</p>
+              </div>
+            </div>
+
+            <div>
+              <h2 style="color: #333; margin-bottom: 10px;">Execution Logs</h2>
+              ${logs.map(log => `
+                <div style="margin: 10px 0; padding: 10px; border-left: 4px solid ${getStatusColor(log.status)}; background-color: #f8f9fa;">
+                  <div style="display: flex; align-items: center;">
+                    <span style="margin-right: 10px;">${getStatusIcon(log.status)}</span>
+                    <span style="color: ${getStatusColor(log.status)}; font-weight: bold;">${log.status.toUpperCase()}</span>
+                    <span style="margin-left: auto; color: #666; font-size: 0.9em;">${log.timestamp}</span>
+                  </div>
+                  <p style="margin: 5px 0 0 0; color: #333;">${log.message}</p>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+
+          <div style="text-align: center; margin-top: 20px; color: #666; font-size: 0.9em;">
+            <p>This is an automated report generated by MagicSlides Test Runner</p>
+          </div>
+        </div>
+      `;
+
+      const data = await resend.emails.send({
+        from: "support@magicslides.io",
+        to: email,
+        subject: `Test Execution Report: ${name}`,
+        html: emailTemplate
+      });
+      console.log("=======================>",data);
       
       return res.status(200).json({
         status: "success",
         screenShots,
         logs,
         steps: executedSteps,
-        runId,
+        runId, // Include runId in response
         tokenUsage: {
           totalTokens: tokenUsage.totalTokens,
           promptTokens: tokenUsage.promptTokens,
@@ -528,16 +587,12 @@ export default async function RunScenario(req, res) {
       });
     } catch (error) {
       addLog(`Error during test execution: ${error.message}`, "error");
-      // Update test status to failed
-      await updateTestStatus(testId, 'failed', error.message);
-      // Send failure email
-      await sendFailureEmail(email, name, testId, logs, error.message);
       return res.status(500).json({
         status: "error",
         message: `Error during test execution: ${error.message}`,
         logs,
         screenShots,
-        runId
+        runId // Include runId in error response
       });
     } finally {
       if (page) await page.close();
@@ -546,16 +601,12 @@ export default async function RunScenario(req, res) {
     }
   } catch (error) {
     addLog(`Fatal error in run scenario: ${error.message}`, "error");
-    // Update test status to failed
-    await updateTestStatus(testId, 'failed', error.message);
-    // Send failure email
-    await sendFailureEmail(email, name, testId, logs, error.message);
     return res.status(500).json({
       status: "error",
       message: `Something went wrong in run scenario: ${error.message}`,
       screenShots,
       logs,
-      runId
+      runId // Include runId in error response
     });
   }
 }
@@ -709,127 +760,4 @@ async function performWithRetry(
   }
 
   return step;
-}
-
-// Helper function to send success email
-async function sendSuccessEmail(email, name, testId, logs, screenShots, tokenUsage) {
-  const emailTemplate = `
-    <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
-      <div style="background-color: #4CAF50; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
-        <h1 style="margin: 0;">Test Execution Successful</h1>
-        <p style="margin: 5px 0 0 0;">${name}</p>
-      </div>
-      
-      <div style="background-color: white; padding: 20px; border-radius: 0 0 5px 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-        <div style="margin-bottom: 20px;">
-          <h2 style="color: #333; margin-bottom: 10px;">Execution Summary</h2>
-          <p style="margin: 5px 0;"><strong>Test ID:</strong> ${testId}</p>
-          <p style="margin: 5px 0;"><strong>Status:</strong> <span style="color: #4CAF50;">Success</span></p>
-          <p style="margin: 5px 0;"><strong>Execution Time:</strong> ${logs[0].timestamp}</p>
-        </div>
-
-        <div style="margin-bottom: 20px;">
-          <h2 style="color: #333; margin-bottom: 10px;">Token Usage</h2>
-          <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px;">
-            <p style="margin: 5px 0;"><strong>Total Tokens:</strong> ${tokenUsage.totalTokens}</p>
-            <p style="margin: 5px 0;"><strong>Estimated Cost:</strong> $${tokenUsage.cost}</p>
-            <p style="margin: 5px 0;"><strong>Model Used:</strong> ${tokenUsage.model}</p>
-          </div>
-        </div>
-
-        <div>
-          <h2 style="color: #333; margin-bottom: 10px;">Execution Logs</h2>
-          ${logs.map(log => `
-            <div style="margin: 10px 0; padding: 10px; border-left: 4px solid ${getStatusColor(log.status)}; background-color: #f8f9fa;">
-              <div style="display: flex; align-items: center;">
-                <span style="margin-right: 10px;">${getStatusIcon(log.status)}</span>
-                <span style="color: ${getStatusColor(log.status)}; font-weight: bold;">${log.status.toUpperCase()}</span>
-                <span style="margin-left: auto; color: #666; font-size: 0.9em;">${log.timestamp}</span>
-              </div>
-              <p style="margin: 5px 0 0 0; color: #333;">${log.message}</p>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-
-      <div style="text-align: center; margin-top: 20px; color: #666; font-size: 0.9em;">
-        <p>This is an automated report generated by MagicSlides Test Runner</p>
-      </div>
-    </div>
-  `;
-
-  await resend.emails.send({
-    from: "support@magicslides.io",
-    to: email,
-    subject: `Test Execution Successful: ${name}`,
-    html: emailTemplate
-  });
-}
-
-// Helper function to send failure email
-async function sendFailureEmail(email, name, testId, logs, errorMessage) {
-  const emailTemplate = `
-    <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
-      <div style="background-color: #f44336; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
-        <h1 style="margin: 0;">Test Execution Failed</h1>
-        <p style="margin: 5px 0 0 0;">${name}</p>
-      </div>
-      
-      <div style="background-color: white; padding: 20px; border-radius: 0 0 5px 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-        <div style="margin-bottom: 20px;">
-          <h2 style="color: #333; margin-bottom: 10px;">Execution Summary</h2>
-          <p style="margin: 5px 0;"><strong>Test ID:</strong> ${testId}</p>
-          <p style="margin: 5px 0;"><strong>Status:</strong> <span style="color: #f44336;">Failed</span></p>
-          <p style="margin: 5px 0;"><strong>Error:</strong> ${errorMessage}</p>
-          <p style="margin: 5px 0;"><strong>Execution Time:</strong> ${logs[0].timestamp}</p>
-        </div>
-
-        <div>
-          <h2 style="color: #333; margin-bottom: 10px;">Execution Logs</h2>
-          ${logs.map(log => `
-            <div style="margin: 10px 0; padding: 10px; border-left: 4px solid ${getStatusColor(log.status)}; background-color: #f8f9fa;">
-              <div style="display: flex; align-items: center;">
-                <span style="margin-right: 10px;">${getStatusIcon(log.status)}</span>
-                <span style="color: ${getStatusColor(log.status)}; font-weight: bold;">${log.status.toUpperCase()}</span>
-                <span style="margin-left: auto; color: #666; font-size: 0.9em;">${log.timestamp}</span>
-              </div>
-              <p style="margin: 5px 0 0 0; color: #333;">${log.message}</p>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-
-      <div style="text-align: center; margin-top: 20px; color: #666; font-size: 0.9em;">
-        <p>This is an automated report generated by MagicSlides Test Runner</p>
-      </div>
-    </div>
-  `;
-
-  await resend.emails.send({
-    from: "support@magicslides.io",
-    to: email,
-    subject: `Test Execution Failed: ${name}`,
-    html: emailTemplate
-  });
-}
-
-// Helper functions for email formatting
-function getStatusColor(status) {
-  switch(status) {
-    case 'success': return '#4CAF50';
-    case 'error': return '#f44336';
-    case 'warning': return '#ff9800';
-    case 'info': return '#2196F3';
-    default: return '#757575';
-  }
-}
-
-function getStatusIcon(status) {
-  switch(status) {
-    case 'success': return '✅';
-    case 'error': return '❌';
-    case 'warning': return '⚠️';
-    case 'info': return 'ℹ️';
-    default: return '•';
-  }
 }
