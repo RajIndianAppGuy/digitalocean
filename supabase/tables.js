@@ -349,7 +349,8 @@ export async function updateStreamRun(runId, updateData) {
       .from("stream_run")
       .update(updateData)
       .eq("run_id", runId)
-      .select();
+      .select()
+      .single();
 
     if (error) throw error;
     return data;
@@ -371,28 +372,6 @@ export async function getStreamRun(runId) {
     return data;
   } catch (error) {
     console.error("Error getting stream run:", error);
-    throw error;
-  }
-}
-
-export async function updateTestStatus(testId, status, errorMessage = null) {
-  try {
-    const updateData = {
-      status,
-      last_run: new Date().toISOString(),
-      error_message: errorMessage
-    };
-
-    const { data, error } = await supabase
-      .from("agents")
-      .update(updateData)
-      .eq("id", testId)
-      .select();
-
-    if (error) throw error;
-    return data;
-  } catch (error) {
-    console.error("Error updating test status:", error);
     throw error;
   }
 }
