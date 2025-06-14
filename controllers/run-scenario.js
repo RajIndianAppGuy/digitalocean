@@ -431,8 +431,9 @@ export default async function RunScenario(req, res) {
   let browser;
   let logs = [];
   let screenShots = [];
-  const tokenTracker = new TokenTracker(); // Create new instance for this request
+  const tokenTracker = new TokenTracker();
   let executionTimeout;
+  let runId; // Declare runId at the top level
   let testInfo = {
     name: 'Unknown Test',
     testId: 'Unknown',
@@ -440,8 +441,63 @@ export default async function RunScenario(req, res) {
     email: 'Unknown'
   };
 
+  // Define addLog function at the top level
+  let addLog;
+  const initializeAddLog = (runId) => {
+    addLog = async (message, status) => {
+      const logEntry = {
+        message,
+        status,
+        timestamp: new Date().toLocaleString('en-US', {
+          year: 'numeric',
+          month: 'short',
+          day: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hour12: true
+        })
+      };
+      
+      logs.push(logEntry);
+      
+      // Update logs in Supabase
+      await updateStreamRun(runId, { logs: [logEntry] });
+    };
+  };
+
   // Function to send error email
   const sendErrorEmail = async (error, testInfo, logs) => {
+    // Format error message to be more user-friendly
+    const formatErrorMessage = (error) => {
+      if (!error.message) return 'An unknown error occurred';
+      
+      // Handle Playwright timeout errors
+      if (error.message.includes('Timeout') && error.message.includes('exceeded')) {
+        const actionMatch = error.message.match(/Failed to execute (\w+) for step (.*?) after/);
+        if (actionMatch) {
+          const [_, action, step] = actionMatch;
+          return `The test couldn't ${action} on "${step}" because the element wasn't ready in time. This usually means the element was either not visible, disabled, or the page was still loading.`;
+        }
+      }
+      
+      // Handle element not found errors
+      if (error.message.includes('No elements found matching selector')) {
+        const selectorMatch = error.message.match(/selector: (.*?)$/);
+        if (selectorMatch) {
+          return `The test couldn't find the element "${selectorMatch[1]}" on the page. This could mean the element was removed or the page structure changed.`;
+        }
+      }
+      
+      // Handle element not enabled errors
+      if (error.message.includes('element is not enabled')) {
+        return 'The test tried to interact with an element that was disabled or not ready for interaction. This could be because the element was not fully loaded or was temporarily disabled.';
+      }
+      
+      // For other errors, return a simplified version
+      return error.message.split('\n')[0]; // Take just the first line of the error
+    };
+
     const errorEmailTemplate = `
       <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
         <div style="background-color: #f44336; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
@@ -453,7 +509,7 @@ export default async function RunScenario(req, res) {
           <div style="margin-bottom: 20px;">
             <h2 style="color: #333; margin-bottom: 10px;">Error Details</h2>
             <div style="background-color: #ffebee; padding: 15px; border-radius: 5px; border-left: 4px solid #f44336;">
-              <p style="margin: 5px 0; color: #d32f2f;"><strong>Error Message:</strong> ${error.message}</p>
+              <p style="margin: 5px 0; color: #d32f2f;"><strong>Error Message:</strong> ${formatErrorMessage(error)}</p>
               <p style="margin: 5px 0;"><strong>Test ID:</strong> ${testInfo.testId}</p>
               <p style="margin: 5px 0;"><strong>Start URL:</strong> ${testInfo.startUrl}</p>
               <p style="margin: 5px 0;"><strong>Failure Time:</strong> ${new Date().toLocaleString()}</p>
@@ -494,7 +550,8 @@ export default async function RunScenario(req, res) {
   };
 
   try {
-    let { startUrl, name, steps, testId, email, runId } = req.body;
+    let { startUrl, name, steps, testId, email, runId: requestRunId } = req.body;
+    runId = requestRunId; // Assign the runId from request to our top-level variable
     
     // Update testInfo with actual values
     testInfo = {
@@ -512,33 +569,19 @@ export default async function RunScenario(req, res) {
     // Initialize stream run in Supabase
     await createStreamRun(runId);
 
-    const addLog = async (message, status) => {
-      const logEntry = {
-        message,
-        status,
-        timestamp: new Date().toLocaleString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: true
-        })
-      };
-      
-      logs.push(logEntry);
-      
-      // Update logs in Supabase
-      await updateStreamRun(runId, { logs: [logEntry] });
-    };
+    // Initialize addLog with runId
+    initializeAddLog(runId);
 
     addLog(`Starting scenario: ${testInfo.name}`, "info");
 
     if (!startUrl || !steps || !name) {
       const error = new Error("Missing required parameters");
-      await sendErrorEmail(error, testInfo, logs);
-      addLog("Error: Missing required parameters", "error");
+      try {
+        await sendErrorEmail(error, testInfo, logs);
+        await addLog("Error: Missing required parameters", "error");
+      } catch (logError) {
+        console.error('Error in error handling:', logError);
+      }
       return res.status(404).json({
         status: "error",
         message: "Something is missing",
@@ -639,6 +682,12 @@ export default async function RunScenario(req, res) {
       });
       console.log("=======================>",data);
       
+      // Update final state in Supabase
+      await updateStreamRun(runId, { 
+        logs: logs,
+        screenshot: screenShots[screenShots.length - 1] || null
+      });
+      
       return res.status(200).json({
         status: "success",
         screenShots,
@@ -654,8 +703,32 @@ export default async function RunScenario(req, res) {
         }
       });
     } catch (error) {
-      await sendErrorEmail(error, testInfo, logs);
-      addLog(`Error during test execution: ${error.message}`, "error");
+      // Capture final error screenshot
+      try {
+        const finalErrorScreenshot = await captureAndStoreScreenshot(
+          page,
+          testId,
+          null, // Use null for stepId to avoid DB type errors
+          runId
+        );
+        screenShots.push(finalErrorScreenshot);
+      } catch (screenshotError) {
+        console.error('Failed to capture final error screenshot:', screenshotError);
+      }
+
+      try {
+        await sendErrorEmail(error, testInfo, logs);
+        await addLog(`Error during test execution: ${error.message}`, "error");
+        
+        // Update the final state in Supabase before sending response
+        await updateStreamRun(runId, { 
+          logs: logs,
+          screenshot: screenShots[screenShots.length - 1] || null
+        });
+      } catch (logError) {
+        console.error('Error in error handling:', logError);
+      }
+      
       return res.status(500).json({
         status: "error",
         message: `Error during test execution: ${error.message}`,
@@ -670,8 +743,19 @@ export default async function RunScenario(req, res) {
       if (browser) await browser.close().catch(console.error);
     }
   } catch (error) {
-    await sendErrorEmail(error, testInfo, logs);
-    addLog(`Fatal error in run scenario: ${error.message}`, "error");
+    try {
+      await sendErrorEmail(error, testInfo, logs);
+      await addLog(`Fatal error in run scenario: ${error.message}`, "error");
+      
+      // Update the final state in Supabase before sending response
+      await updateStreamRun(runId, { 
+        logs: logs,
+        screenshot: screenShots[screenShots.length - 1] || null
+      });
+    } catch (logError) {
+      console.error('Error in error handling:', logError);
+    }
+    
     return res.status(500).json({
       status: "error",
       message: `Something went wrong in run scenario: ${error.message}`,
@@ -699,6 +783,7 @@ async function performWithRetry(
   runId
 ) {
   let errmsg = "";
+  let lastError = null;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -791,9 +876,24 @@ async function performWithRetry(
 
       return step; // If action succeeds, return the updated step
     } catch (error) {
+      lastError = error;
       console.error(
         `Error during ${type} attempt ${attempt} for step ${step.selector}: ${error.message}`
       );
+
+      // Capture error screenshot
+      try {
+        const errorScreenshot = await captureAndStoreScreenshot(
+          page,
+          testId,
+          step.id,
+          runId
+        );
+        screenShots.push(errorScreenshot);
+      } catch (screenshotError) {
+        console.error('Failed to capture error screenshot:', screenshotError);
+      }
+
       if (attempt < retries) {
         console.log(`Retrying to fetch selector for step ${step.selector}...`);
         try {
@@ -823,8 +923,9 @@ async function performWithRetry(
           throw new Error(`Failed to get valid selector after ${attempt} attempts: ${errormsg.message}`);
         }
       } else {
+        // On final attempt, throw the last error with all context
         throw new Error(
-          `Failed to execute ${type} for step ${step.selector} after ${retries} attempts: ${error.message}`
+          `Failed to execute ${type} for step ${step.selector} after ${retries} attempts: ${lastError.message}`
         );
       }
     }
