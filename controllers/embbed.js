@@ -18,7 +18,7 @@ function generateSlug() {
   );
 }
 
-async function generateEmbeddingWithRetry(text, maxRetries = 5) {
+async function generateEmbeddingWithRetry(text, tokenTracker, maxRetries = 5) {
   for (let i = 0; i < maxRetries; i++) {
     try {
       const response = await axios.post(
@@ -34,8 +34,27 @@ async function generateEmbeddingWithRetry(text, maxRetries = 5) {
           },
         }
       );
+      
+      
+      // Track token usage from the actual API response
+      if (response.data.usage) {
+        console.log("Adding usage to token tracker:", response.data.usage); // Debug log
+        tokenTracker.addUsage({
+          data: {
+            usage: {
+              prompt_tokens: response.data.usage.prompt_tokens,
+              completion_tokens: 0,
+              total_tokens: response.data.usage.total_tokens
+            }
+          }
+        }, "text-embedding-3-small");
+      } else {
+        console.log("No usage data in OpenAI response"); // Debug log
+      }
+      
       return response.data.data[0].embedding;
     } catch (error) {
+      console.error("Error in generateEmbeddingWithRetry:", error); // Debug log
       if (i === maxRetries - 1) throw error;
       await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
     }
@@ -103,7 +122,7 @@ export default async function embedController(req, res) {
       const parallelEmbeddings = await Promise.all(
         output.map(async (doc, i) => {
           console.log("Generating embedding for chunk: ", i);
-          const embedding = await generateEmbeddingWithRetry(doc.pageContent);
+          const embedding = await generateEmbeddingWithRetry(doc.pageContent, tokenTracker);
           totalChars += doc.pageContent.length;
           return {
             slug: slug,
@@ -132,7 +151,7 @@ export default async function embedController(req, res) {
           currentChunk.map(async (doc, i) => {
             const actualIndex = start + i;
             console.log(`Generating embedding for chunk: ${actualIndex}`);
-            const embedding = await generateEmbeddingWithRetry(doc.pageContent);
+            const embedding = await generateEmbeddingWithRetry(doc.pageContent, tokenTracker);
             totalChars += doc.pageContent.length;
             return {
               slug: slug,
@@ -147,23 +166,9 @@ export default async function embedController(req, res) {
       }
     }
 
-    const estimatedTokens = Math.round(totalChars / 4); // Approx 4 chars = 1 token
-    const estimatedCost = (estimatedTokens / 1000) * 0.0001;
-
-    // Add embedding tokens to the token tracker
-    tokenTracker.addUsage({
-      data: {
-        usage: {
-          prompt_tokens: estimatedTokens,
-          completion_tokens: 0,
-          total_tokens: estimatedTokens
-        }
-      }
-    }, "text-embedding-3-small");
-
-    console.log("Total Chars:", totalChars);
-    console.log("Estimated Tokens:", estimatedTokens);
-    console.log("Estimated Cost ($):", estimatedCost.toFixed(6));
+    // Get token usage from the tracker
+    const tokenUsage = tokenTracker.getUsage();
+    console.log("Final Token Usage:", tokenUsage);
 
     console.log("Storing embeddings");
     await Promise.all(
@@ -190,8 +195,8 @@ export default async function embedController(req, res) {
       status: "success",
       message: "Page Embedded successfully",
       slug: slug,
-      tokens: estimatedTokens,
-      cost: estimatedCost.toFixed(6),
+      tokens: tokenUsage.totalTokens,
+      cost: tokenUsage.cost,
       totalTime: totalTime
     });
   } catch (error) {
