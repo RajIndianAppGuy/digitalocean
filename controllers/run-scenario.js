@@ -181,6 +181,33 @@ async function executeSteps(
           { maxContentLength: Infinity, maxBodyLength: Infinity }
         );
 
+        console.log("Embedding Response:======================================================================>", res1.data);
+
+        // Update the main token tracker with embedding usage
+        if (res1.data.tokens) {
+          console.log("Adding embedding tokens to main tracker:", res1.data.tokens);
+          // Create a response object that matches the expected format
+          const usageResponse = {
+            data: {
+              usage: {
+                prompt_tokens: res1.data.tokens,
+                completion_tokens: 0,
+                total_tokens: res1.data.tokens
+              }
+            }
+          };
+          
+          tokenTracker.addUsage(usageResponse, "text-embedding-3-small", false, {
+            type: "Embedding",
+            description: `Embedding for URL: ${currentUrl}`
+          });
+          
+          // Log the main tracker state after update
+          console.log("Main token tracker state after embedding:", tokenTracker.getUsage());
+        } else {
+          console.log("No tokens found in embedding response");
+        }
+
         addLog(`Reading page`, "success");
 
         const slug = res1.data.slug;
@@ -201,6 +228,7 @@ async function executeSteps(
           step.chunk = res2.data.data;
         }
       } catch (error) {
+        console.error("Error in embedding step:", error);
         addLog(`Error in updating step: ${error.message}`, "error");
         throw new Error(`Error in updating step: ${error.message}`);
       }
@@ -224,7 +252,8 @@ async function executeSteps(
               name,
               clickImage,
               '',
-              tokenTracker
+              tokenTracker,
+              { type: 'Click Element', description: step.details.element }
             );
             step.selector = initialClickSelector.selector;
             delete step.chunk;
@@ -296,7 +325,8 @@ async function executeSteps(
               name,
               inputImage,
               '',
-              tokenTracker
+              tokenTracker,
+              { type: 'Fill Input', description: step.details.description }
             );
             step.selector = initialFillSelector.selector;
             delete step.chunk;
@@ -361,7 +391,8 @@ async function executeSteps(
           const analysisResult = await analyzeScreenshot(
             screenshotUrl,
             step.question,
-            tokenTracker
+            tokenTracker,
+            { type: 'AI Visual Assertion', description: step.question }
           );
           console.log(analysisResult);
           screenShots.push(screenshotUrl);
@@ -649,7 +680,22 @@ export default async function RunScenario(req, res) {
               <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px;">
                 <p style="margin: 5px 0;"><strong>Total Tokens:</strong> ${tokenUsage.totalTokens}</p>
                 <p style="margin: 5px 0;"><strong>Estimated Cost:</strong> $${tokenUsage.cost}</p>
-                <p style="margin: 5px 0;"><strong>Model Used:</strong> ${tokenUsage.model}</p>
+                <p style="margin: 5px 0;"><strong>Embedding Model:</strong> ${tokenUsage.embeddingModel || 'Not Used'}</p>
+                <p style="margin: 5px 0;"><strong>Execution Model:</strong> ${tokenUsage.executionModel || 'No Model Used (All Steps Cached)'}</p>
+              </div>
+            </div>
+
+            <div style="margin-bottom: 20px;">
+              <h2 style="color: #333; margin-bottom: 10px;">Step-by-Step Token Usage</h2>
+              <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px;">
+                ${tokenUsage.stepBreakdown.map(step => `
+                  <div style="margin-bottom: 10px; padding: 10px; border-left: 4px solid #2196F3; background-color: white;">
+                    <p style="margin: 5px 0;"><strong>Step:</strong> ${step.step.type} - ${step.step.description}</p>
+                    <p style="margin: 5px 0;"><strong>Tokens Used:</strong> ${step.tokens}</p>
+                    <p style="margin: 5px 0;"><strong>Cost:</strong> $${step.cost}</p>
+                    <p style="margin: 5px 0;"><strong>Model:</strong> ${step.model}</p>
+                  </div>
+                `).join('')}
               </div>
             </div>
 
@@ -699,7 +745,8 @@ export default async function RunScenario(req, res) {
           promptTokens: tokenUsage.promptTokens,
           completionTokens: tokenUsage.completionTokens,
           estimatedCost: tokenUsage.cost,
-          modelUsed: tokenUsage.model
+          embeddingModel: tokenUsage.embeddingModel,
+          executionModel: tokenUsage.executionModel
         }
       });
     } catch (error) {
