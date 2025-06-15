@@ -2,22 +2,25 @@ import { supabase } from "../utils/SupabaseClient.js";
 
 export async function checkEmbaddingExists(url) {
   try {
+    console.log("Checking for existing embedding for URL:", url);
     const { data, error } = await supabase
       .from("ms_text_info")
       .select("*")
       .eq("url", url);
 
-    console.log(data);
-
-    if (data?.length === 0) {
-      return null;
-    }
+    console.log("Existing embedding data:", data);
 
     if (error) {
       console.log("Supabase Slug Checking Internal Error: ", error);
       return null;
     }
 
+    if (!data || data.length === 0) {
+      console.log("No existing embedding found for URL:", url);
+      return null;
+    }
+
+    console.log("Found existing embedding for URL:", url);
     return data;
   } catch (error) {
     console.log("Supabase Slug Checking Error: ", error);
