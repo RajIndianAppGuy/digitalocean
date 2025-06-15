@@ -1,4 +1,4 @@
-// Pricing information (per 1 million tokens)
+// Pricing information (per 1 million tokens, except embeddings which are per 1K tokens)
 const MODEL_PRICING = {
   "gpt-4o": {
     input: 2.50,    // $2.50 per 1M input tokens
@@ -31,36 +31,57 @@ class TokenTracker {
       completionTokens: 0,
       imageTokens: 0,
       cost: 0,
-      model: null,
+      embeddingModel: null,
+      executionModel: null,
+      stepBreakdown: [] // Array to store token usage for each step
     };
   }
 
-  addUsage(response, model, hasImage = false) {
+  addUsage(response, model, hasImage = false, stepInfo = null) {
     if (response.data.usage) {
       this.usage.promptTokens += response.data.usage.prompt_tokens || 0;
       this.usage.completionTokens += response.data.usage.completion_tokens || 0;
       this.usage.totalTokens += response.data.usage.total_tokens || 0;
-      this.usage.model = model;
-      
-      // Calculate cost
+
+      if (model === 'text-embedding-3-small' || model === 'text-embedding-ada-002') {
+        this.usage.embeddingModel = model;
+      } else {
+        this.usage.executionModel = model;
+      }
+
       if (MODEL_PRICING[model]) {
-        const inputCost = (this.usage.promptTokens / 1000000) * MODEL_PRICING[model].input;
-        const outputCost = (this.usage.completionTokens / 1000000) * MODEL_PRICING[model].output;
-        
-        // Add image token cost if image was used
+        // Determine divisor: 1000 for embeddings, 1000000 for GPT models
+        const isEmbedding = model.includes('embedding');
+        const inputDivisor = isEmbedding ? 1000 : 1000000;
+        const outputDivisor = isEmbedding ? 1000 : 1000000;
+
+        const inputCost = (response.data.usage.prompt_tokens / inputDivisor) * MODEL_PRICING[model].input;
+        const outputCost = (response.data.usage.completion_tokens / outputDivisor) * MODEL_PRICING[model].output;
         let imageCost = 0;
         if (hasImage) {
-          // Each image is considered as 85 tokens
           this.usage.imageTokens += 85;
           imageCost = (85 / 1000000) * MODEL_PRICING[model].image;
         }
-        
-        this.usage.cost = inputCost + outputCost + imageCost;
+        this.usage.cost += inputCost + outputCost + imageCost;
+
+        // Only push step breakdown if stepInfo is provided
+        if (stepInfo) {
+          this.usage.stepBreakdown.push({
+            step: stepInfo,
+            tokens: response.data.usage.total_tokens || 0,
+            cost: inputCost + outputCost + imageCost,
+            model: model
+          });
+        }
       }
     }
   }
 
   getUsage() {
+    // If all steps are cached, set executionModel to null
+    if (this.usage.stepBreakdown.length === 0) {
+      this.usage.executionModel = null;
+    }
     return this.usage;
   }
 
@@ -71,7 +92,9 @@ class TokenTracker {
       completionTokens: 0,
       imageTokens: 0,
       cost: 0,
-      model: null,
+      embeddingModel: null,
+      executionModel: null,
+      stepBreakdown: []
     };
   }
 }
