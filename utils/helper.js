@@ -7,7 +7,7 @@ import {
 } from "./prompt.js";
 import openai from "../config/openai.js";
 
-export const getSelector = async (step, name, screenshotUrl, err, tokenTracker) => {
+export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, stepInfo = null) => {
   let userMessage = userMessageToOpenAI(step, step.chunk, name, err);
 
   const funcitonTools = CreatePlaywrightSelector();
@@ -38,8 +38,8 @@ export const getSelector = async (step, name, screenshotUrl, err, tokenTracker) 
     }
   );
   
-  // Track token usage
-  tokenTracker.addUsage(response, model, true);
+  // Track token usage with step information
+  tokenTracker.addUsage(response, model, true, stepInfo);
   
   console.log(
     "got this selector ==============================>",
@@ -49,11 +49,10 @@ export const getSelector = async (step, name, screenshotUrl, err, tokenTracker) 
 };
 
 
-export const getExtensionSelector = async (element) => {
+export const getExtensionSelector = async (element, tokenTracker, stepInfo = null) => {
   let userMessage = extensionMessageToOpenAI(element);
   console.log("User Message---", userMessage);
 
-  // const funcitonTools = CreatePlaywrightSelector();
   const completion = await openai.chat.completions.create({
     model: "gpt-4o",
     messages: [
@@ -62,13 +61,11 @@ export const getExtensionSelector = async (element) => {
         content: userMessage,
       },
     ],
-    // tools: [
-    //   {
-    //     type: "function",
-    //     function: funcitonTools,
-    //   },
-    // ],
   });
+  
+  // Track token usage with step information
+  tokenTracker.addUsage(completion, "gpt-4o", false, stepInfo);
+  
   console.log("Response: ", completion.choices[0].message.content);
 
   return completion.choices[0].message.content;
