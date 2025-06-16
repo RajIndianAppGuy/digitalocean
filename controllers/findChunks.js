@@ -22,10 +22,10 @@ export default async function searchController(req, res) {
 
     // Check slug is present or not
     const slugData = await checkSlug(slug);
-    if (slugData.length === 0) {
+    if (!slugData || slugData.length === 0) {
       return res.status(400).json({
-        status: "true",
-        message: "Please enter a valid slug",
+        status: "error",
+        message: "No data found for the provided slug",
       });
     }
 
@@ -34,36 +34,45 @@ export default async function searchController(req, res) {
       apiKey: process.env.OPENAI_KEY,
     });
 
-    const embeddedResponse = await embedding.embedQuery(text);
-    // console.log("Embedded Response: ", embeddedResponse);
+    try {
+      const embeddedResponse = await embedding.embedQuery(text);
+      
+      // Search in Supabase
+      const searchData = await checkEmbadding(embeddedResponse, slug);
 
-    // Search in Supabase
-    const searchData = await checkEmbadding(embeddedResponse, slug);
-    // console.log("Search Data: ", searchData);
+      // Check if the search data is empty or not
+      if (!searchData || searchData.length === 0) {
+        return res.status(404).json({
+          status: "error",
+          message: "No matching content found for the search text",
+        });
+      }
 
-    // Check if the search data is empty or not
-    if (!searchData || searchData.length === 0) {
-      return res.status(400).json({
+      // Fetch all the content of slugs
+      let fetchedContent = "";
+      searchData.forEach((item) => {
+        fetchedContent += item.content;
+      });
+
+      return res.status(200).json({
+        status: "success",
+        message: "Retrieve successful",
+        data: fetchedContent,
+      });
+    } catch (embeddingError) {
+      console.error("Error in embedding or search:", embeddingError);
+      return res.status(500).json({
         status: "error",
-        message: "Retrieve not possible",
+        message: `Error processing search: ${embeddingError.message}`,
+        details: embeddingError
       });
     }
-
-    // Fetch all the content of slugs
-    let fetchedContent = "";
-    searchData.forEach((item) => {
-      fetchedContent += item.content;
-    });
-
-    return res.status(200).json({
-      status: "success",
-      message: "Retrieve successful",
-      data: fetchedContent,
-    });
   } catch (error) {
+    console.error("Error in searchController:", error);
     return res.status(500).json({
       status: "error",
-      message: `Internal server error at searchController: ${error}`,
+      message: `Internal server error: ${error.message}`,
+      details: error
     });
   }
 }
