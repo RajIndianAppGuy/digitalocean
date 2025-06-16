@@ -119,8 +119,8 @@ export async function updateTextInfo(oldSlug, newSlug) {
 }
 
 export async function checkEmbadding(embadding, slug) {
-  const maxRetries = 15; // Increased to 15 attempts
-  const baseDelay = 1000; // 1 second
+  const maxRetries = 15; // 15 attempts
+  const retryDelay = 3000; // Consistent 3 second delay
   const matchCount = 2; // 2 matches for faster query
   const timeout = 15000; // 15 second timeout
 
@@ -140,9 +140,8 @@ export async function checkEmbadding(embadding, slug) {
         
         // If it's a timeout error and we haven't reached max retries
         if (error.code === '57014' && attempt < maxRetries) {
-          const delay = baseDelay * Math.pow(2, attempt - 1);
-          console.log(`Timeout occurred, retrying with fallback in ${delay}ms...`);
-          await new Promise(resolve => setTimeout(resolve, delay));
+          console.log(`Timeout occurred, retrying in ${retryDelay}ms...`);
+          await new Promise(resolve => setTimeout(resolve, retryDelay));
           
           // Try fallback query with even more reduced parameters
           try {
@@ -197,9 +196,8 @@ export async function checkEmbadding(embadding, slug) {
         }
       }
       
-      const delay = baseDelay * Math.pow(2, attempt - 1);
-      console.log(`Retrying in ${delay}ms due to error:`, error.message);
-      await new Promise(resolve => setTimeout(resolve, delay));
+      console.log(`Retrying in ${retryDelay}ms due to error:`, error.message);
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
     }
   }
 }
