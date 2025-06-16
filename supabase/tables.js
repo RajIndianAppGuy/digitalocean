@@ -119,39 +119,84 @@ export async function updateTextInfo(oldSlug, newSlug) {
 }
 
 export async function checkEmbadding(embadding, slug) {
-  const maxRetries = 5;
+  const maxRetries = 15; // Increased to 15 attempts
   const baseDelay = 1000; // 1 second
+  const matchCount = 2; // 2 matches for faster query
+  const timeout = 15000; // 15 second timeout
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      const matchCount = 5;
-
+      // First try with a smaller subset of data
       const { data, error } = await supabase.rpc("match_documents_by_slug", {
         match_count: matchCount,
         query_embedding: embadding,
         slug_search: slug,
+      }, {
+        timeout: timeout
       });
 
       if (error) {
-        console.log(`Supabase Embadding Checking Internal Error (Attempt ${attempt}/${maxRetries}):`, error);
+        console.error(`Supabase Embedding Error (Attempt ${attempt}/${maxRetries}):`, error);
         
-        // If it's a timeout error and we haven't reached max retries, wait and retry
+        // If it's a timeout error and we haven't reached max retries
         if (error.code === '57014' && attempt < maxRetries) {
-          const delay = baseDelay * Math.pow(2, attempt - 1); // Exponential backoff
-          console.log(`Retrying in ${delay}ms...`);
+          const delay = baseDelay * Math.pow(2, attempt - 1);
+          console.log(`Timeout occurred, retrying with fallback in ${delay}ms...`);
           await new Promise(resolve => setTimeout(resolve, delay));
-          continue;
+          
+          // Try fallback query with even more reduced parameters
+          try {
+            const fallbackResult = await supabase.rpc("match_documents_by_slug", {
+              match_count: 1, // Try with just 1 match
+              query_embedding: embadding,
+              slug_search: slug,
+            }, {
+              timeout: timeout / 2 // Half the timeout for fallback
+            });
+            
+            if (fallbackResult.error) {
+              throw fallbackResult.error;
+            }
+            
+            return fallbackResult.data;
+          } catch (fallbackError) {
+            console.error('Fallback query also failed:', fallbackError);
+            continue; // Continue to next retry if fallback fails
+          }
         }
-        throw error;
+        
+        throw new Error(`Supabase RPC error: ${error.message} (Code: ${error.code})`);
+      }
+
+      if (!data) {
+        throw new Error('No data returned from Supabase RPC call');
       }
 
       return data;
     } catch (error) {
       if (attempt === maxRetries) {
-        console.log("Supabase Embadding Checking Error (Final attempt):", error);
-        throw error;
+        console.error("Final embedding check error:", error);
+        // Try one last time with minimal parameters
+        try {
+          const lastResortResult = await supabase.rpc("match_documents_by_slug", {
+            match_count: 1,
+            query_embedding: embadding,
+            slug_search: slug,
+          }, {
+            timeout: 5000 // 5 second timeout for last resort
+          });
+          
+          if (lastResortResult.error) {
+            throw lastResortResult.error;
+          }
+          
+          return lastResortResult.data;
+        } catch (lastResortError) {
+          console.error('Last resort query failed:', lastResortError);
+          throw new Error(`Search operation failed after ${maxRetries} attempts. The database may be under heavy load or the query is too complex.`);
+        }
       }
-      // For other errors, continue with retry
+      
       const delay = baseDelay * Math.pow(2, attempt - 1);
       console.log(`Retrying in ${delay}ms due to error:`, error.message);
       await new Promise(resolve => setTimeout(resolve, delay));
