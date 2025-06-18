@@ -29,7 +29,7 @@ export async function checkEmbaddingExists(url) {
 }
 
 export async function storeEmbadding(supabaseInput) {
-  const maxRetries = 5;
+  const maxRetries = 10;
   const baseDelay = 1000; // 1 second
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
@@ -43,8 +43,7 @@ export async function storeEmbadding(supabaseInput) {
         
         // If it's a timeout error and we haven't reached max retries, wait and retry
         if (error.code === '57014' && attempt < maxRetries) {
-          const delay = baseDelay * Math.pow(2, attempt - 1); // Exponential backoff
-          console.log(`Retrying in ${delay}ms...`);
+          const delay = 1000
           await new Promise(resolve => setTimeout(resolve, delay));
           continue;
         }
@@ -124,7 +123,8 @@ export async function checkEmbadding(embadding, slug) {
   const matchCount = 2; // 2 matches for faster query
   const timeout = 15000; // 15 second timeout
 
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+  let attempt = 1;
+  while (true) {
     try {
       // First try with a smaller subset of data
       const { data, error } = await supabase.rpc("match_documents_by_slug", {
@@ -137,12 +137,10 @@ export async function checkEmbadding(embadding, slug) {
 
       if (error) {
         console.error(`Supabase Embedding Error (Attempt ${attempt}/${maxRetries}):`, error);
-        
         // If it's a timeout error and we haven't reached max retries
         if (error.code === '57014' && attempt < maxRetries) {
           console.log(`Timeout occurred, retrying in ${retryDelay}ms...`);
           await new Promise(resolve => setTimeout(resolve, retryDelay));
-          
           // Try fallback query with even more reduced parameters
           try {
             const fallbackResult = await supabase.rpc("match_documents_by_slug", {
@@ -152,25 +150,21 @@ export async function checkEmbadding(embadding, slug) {
             }, {
               timeout: timeout / 2 // Half the timeout for fallback
             });
-            
             if (fallbackResult.error) {
               throw fallbackResult.error;
             }
-            
             return fallbackResult.data;
           } catch (fallbackError) {
             console.error('Fallback query also failed:', fallbackError);
+            attempt++;
             continue; // Continue to next retry if fallback fails
           }
         }
-        
         throw new Error(`Supabase RPC error: ${error.message} (Code: ${error.code})`);
       }
-
       if (!data) {
         throw new Error('No data returned from Supabase RPC call');
       }
-
       return data;
     } catch (error) {
       if (attempt === maxRetries) {
@@ -184,20 +178,28 @@ export async function checkEmbadding(embadding, slug) {
           }, {
             timeout: 5000 // 5 second timeout for last resort
           });
-          
           if (lastResortResult.error) {
             throw lastResortResult.error;
           }
-          
           return lastResortResult.data;
         } catch (lastResortError) {
           console.error('Last resort query failed:', lastResortError);
-          throw new Error(`Search operation failed after ${maxRetries} attempts. The database may be under heavy load or the query is too complex.`);
+          // Instead of throwing, wait 2 minutes and then keep retrying indefinitely
+          console.error(`Search operation failed after ${maxRetries} attempts. Waiting 2 minutes before retrying indefinitely...`);
+          await new Promise(resolve => setTimeout(resolve, 120000)); // Wait 2 minutes
+          attempt = maxRetries + 1; // Ensure we don't hit this block again
+          continue; // Go back to the start of the loop and keep retrying
         }
       }
-      
-      console.log(`Retrying in ${retryDelay}ms due to error:`, error.message);
-      await new Promise(resolve => setTimeout(resolve, retryDelay));
+      if (attempt < maxRetries) {
+        console.log(`Retrying in ${retryDelay}ms due to error:`, error.message);
+        await new Promise(resolve => setTimeout(resolve, retryDelay));
+        attempt++;
+      } else if (attempt > maxRetries) {
+        // After 15 attempts, always wait 2 minutes before retrying
+        console.log(`Retrying after 2 minutes due to persistent error:`, error.message);
+        await new Promise(resolve => setTimeout(resolve, 120000));
+      }
     }
   }
 }
