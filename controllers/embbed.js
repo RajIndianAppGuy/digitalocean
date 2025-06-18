@@ -34,36 +34,93 @@ async function generateEmbeddingWithRetry(text, tokenTracker, maxRetries = 5) {
           },
         }
       );
-      
-      
+
       // Track token usage from the actual API response
       if (response.data.usage) {
-        console.log("Adding usage to token tracker:", response.data.usage); // Debug log
-        tokenTracker.addUsage({
-          data: {
-            usage: {
-              prompt_tokens: response.data.usage.prompt_tokens,
-              completion_tokens: 0,
-              total_tokens: response.data.usage.total_tokens
-            }
-          }
-        }, "text-embedding-3-small");
+        console.log("Adding usage to token tracker:", response.data.usage);
+        tokenTracker.addUsage(
+          {
+            data: {
+              usage: {
+                prompt_tokens: response.data.usage.prompt_tokens,
+                completion_tokens: 0,
+                total_tokens: response.data.usage.total_tokens,
+              },
+            },
+          },
+          "text-embedding-3-small"
+        );
       } else {
-        console.log("No usage data in OpenAI response"); // Debug log
+        console.log("No usage data in OpenAI response");
       }
-      
+
       return response.data.data[0].embedding;
     } catch (error) {
-      console.error("Error in generateEmbeddingWithRetry:", error); // Debug log
+      console.error("Error in generateEmbeddingWithRetry:", error);
       if (i === maxRetries - 1) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1))); // Exponential backoff
+      await new Promise((resolve) => setTimeout(resolve, 1000 * (i + 1)));
+    }
+  }
+}
+
+async function processBatchWithTimeout(batch, slug, timestamp, tokenTracker, retries = 7) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    console.log(`Starting batch processing attempt ${attempt}/${retries}`);
+    
+    // Create a timeout promise that rejects after 2 minutes
+    const timeoutPromise = new Promise((_, reject) => {
+      setTimeout(() => {
+        reject(new Error(`Batch processing timed out after 2 minutes (attempt ${attempt})`));
+      }, 180000); // 3 minutes in milliseconds
+    });
+
+    // Create the batch processing promise
+    const batchProcessingPromise = (async () => {
+      let totalChars = 0;
+      const embeddings = [];
+      
+      const chunkEmbeddings = await Promise.all(
+        batch.map(async (doc, i) => {
+          console.log(`Generating embedding for chunk: ${i}`);
+          const embedding = await generateEmbeddingWithRetry(
+            doc.pageContent,
+            tokenTracker
+          );
+          totalChars += doc.pageContent.length;
+          return {
+            slug: slug,
+            timestamp: timestamp,
+            content: doc.pageContent,
+            embedding: embedding,
+            metadata: doc.metadata,
+          };
+        })
+      );
+      
+      embeddings.push(...chunkEmbeddings);
+      return embeddings;
+    })();
+
+    try {
+      // Race between the batch processing and the timeout
+      const result = await Promise.race([batchProcessingPromise, timeoutPromise]);
+      console.log(`Batch processing completed successfully on attempt ${attempt}`);
+      return result;
+    } catch (error) {
+      console.error(`Batch processing attempt ${attempt} failed:`, error.message);
+      
+      if (attempt === retries) {
+        throw new Error(`All ${retries} attempts to process batch failed`);
+      }
+      
+      await new Promise(resolve => setTimeout(resolve, 3000));
     }
   }
 }
 
 export default async function embedController(req, res) {
-  const tokenTracker = new TokenTracker(); // Create new instance for this request
-  
+  const tokenTracker = new TokenTracker();
+
   try {
     const startTime = Date.now();
     const { url, content, initial } = req.body;
@@ -79,22 +136,48 @@ export default async function embedController(req, res) {
       });
     }
 
+    let success = false;
+    const maxAttempts = 3;
+    let attempt = 0;
+
     if (url && initial) {
-      const response = await axios.get("https://app.scrapingbee.com/api/v1", {
-        params: {
-          api_key: process.env.SCRAPING_API_KEY,
-          url,
-          render_js: true,
-          block_ads: true,
-          wait: 5000,
-        },
-        timeout: 80000,
-      });
-      text = response.data;
-      console.log(`Generating data for URL`);
+      while (attempt < maxAttempts && !success) {
+        try {
+          console.log(`🚀 Attempt ${attempt + 1} to scrape URL...`);
+
+          const response = await axios.get(
+            "https://app.scrapingbee.com/api/v1",
+            {
+              params: {
+                api_key: process.env.SCRAPING_API_KEY,
+                url,
+                render_js: true,
+                block_ads: true,
+                wait: 20000,
+              },
+              timeout: 80000,
+            }
+          );
+
+          text = response.data;
+          console.log(`✅ Scraping succeeded on attempt ${attempt + 1}`);
+          success = true;
+        } catch (error) {
+          console.error(`❌ Attempt ${attempt + 1} failed: ${error.message}`);
+          attempt++;
+
+          if (attempt < maxAttempts) {
+            console.log(`⏳ Waiting 10 seconds before retrying...`);
+            await new Promise((resolve) => setTimeout(resolve, 10000));
+          } else {
+            console.error(`❌ All ${maxAttempts} attempts failed. Exiting.`);
+            throw error;
+          }
+        }
+      }
     } else {
       text = content;
-      console.log(`Generating data for content`);
+      console.log(`📄 Using static content instead of scraping`);
     }
 
     const splitter = new RecursiveCharacterTextSplitter({
@@ -112,18 +195,18 @@ export default async function embedController(req, res) {
     console.log("Timestamp: ", timestamp);
 
     console.log("Generating embeddings");
-    let totalChars = 0;
-    console.log("Output: ", output.length);
     const embeddings = [];
-    
+
     if (output.length <= 500) {
       // Process small batches in parallel
       console.log("Processing small batch in parallel");
       const parallelEmbeddings = await Promise.all(
         output.map(async (doc, i) => {
           console.log("Generating embedding for chunk: ", i);
-          const embedding = await generateEmbeddingWithRetry(doc.pageContent, tokenTracker);
-          totalChars += doc.pageContent.length;
+          const embedding = await generateEmbeddingWithRetry(
+            doc.pageContent,
+            tokenTracker
+          );
           return {
             slug: slug,
             timestamp: timestamp,
@@ -135,34 +218,29 @@ export default async function embedController(req, res) {
       );
       embeddings.push(...parallelEmbeddings);
     } else {
-      // Process large batches in chunks of 300
+      // Process large batches in chunks of 300 with timeout and retries
       console.log("Processing large batch in chunks of 300");
       const chunkSize = 300;
       const totalChunks = Math.ceil(output.length / chunkSize);
-      
+
       for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
         console.log(`Processing chunk ${chunkIndex + 1} of ${totalChunks}`);
         const start = chunkIndex * chunkSize;
         const end = Math.min(start + chunkSize, output.length);
         const currentChunk = output.slice(start, end);
-        
-        // Process current chunk in parallel
-        const chunkEmbeddings = await Promise.all(
-          currentChunk.map(async (doc, i) => {
-            const actualIndex = start + i;
-            console.log(`Generating embedding for chunk: ${actualIndex}`);
-            const embedding = await generateEmbeddingWithRetry(doc.pageContent, tokenTracker);
-            totalChars += doc.pageContent.length;
-            return {
-              slug: slug,
-              timestamp: timestamp,
-              content: doc.pageContent,
-              embedding: embedding,
-              metadata: doc.metadata,
-            };
-          })
-        );
-        embeddings.push(...chunkEmbeddings);
+
+        try {
+          const chunkEmbeddings = await processBatchWithTimeout(
+            currentChunk,
+            slug,
+            timestamp,
+            tokenTracker
+          );
+          embeddings.push(...chunkEmbeddings);
+        } catch (error) {
+          console.error(`Failed to process chunk ${chunkIndex + 1}:`, error.message);
+          throw error;
+        }
       }
     }
 
@@ -189,7 +267,9 @@ export default async function embedController(req, res) {
     }
 
     const totalTime = (Date.now() - startTime) / 1000;
-    console.log(`Total time taken for embedding and storing: ${totalTime} seconds`);
+    console.log(
+      `Total time taken for embedding and storing: ${totalTime} seconds`
+    );
 
     res.status(201).json({
       status: "success",
@@ -197,7 +277,7 @@ export default async function embedController(req, res) {
       slug: slug,
       tokens: tokenUsage.totalTokens,
       cost: tokenUsage.cost,
-      totalTime: totalTime
+      totalTime: totalTime,
     });
   } catch (error) {
     console.error("Error processing request:", error);
