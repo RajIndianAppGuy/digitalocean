@@ -1,11 +1,58 @@
 import axios from "axios";
 import TokenTracker from "./tokenTracker.js";
 import {
+  CreateErrorExplanationFunction,
   CreatePlaywrightSelector,
   extensionMessageToOpenAI,
   userMessageToOpenAI,
 } from "./prompt.js";
-import openai from "../config/openai.js";
+
+import openai from "../config/openai.js"; // Assuming this is your OpenAI client instance
+
+export async function getUserFriendlyErrorMessage(rawErrorText, tokenTracker = null) {
+  const model = process.env.OPENAI_MODEL || "gpt-4o";
+  const openaiKey = process.env.OPENAI_KEY;
+
+  const functionTool = CreateErrorExplanationFunction();
+
+  const prompt = `This is a technical error from an automated test. Please explain it in a user-friendly way:\n"${rawErrorText}"`;
+
+  const response = await axios.post(
+    "https://api.openai.com/v1/chat/completions",
+    {
+      model: model,
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+      functions: [functionTool],
+      function_call: { name: "generate_user_friendly_error" },
+      temperature: 0.7,
+      max_tokens: 300,
+    },
+    {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${openaiKey}`,
+      },
+    }
+  );
+
+  const resultArgs = response.data.choices[0].message.function_call.arguments;
+
+  if (tokenTracker) {
+    tokenTracker.addUsage(response, model, true, {
+      type: "Error Explanation",
+      description: rawErrorText.slice(0, 50) + "...",
+    });
+  }
+
+  const parsed = JSON.parse(resultArgs);
+  return parsed.explanation;
+}
+
 
 export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, stepInfo = null) => {
   let userMessage = userMessageToOpenAI(step, step.chunk, name, err);
