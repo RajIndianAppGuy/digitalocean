@@ -66,6 +66,24 @@ Here is the element to analyze: ${element}
   return userMessage;
 }
 
+export function CreateErrorExplanationFunction() {
+  return {
+    name: "generate_user_friendly_error",
+    description: "Converts a technical error message into a user-friendly explanation for non-technical users.",
+    parameters: {
+      type: "object",
+      properties: {
+        explanation: {
+          type: "string",
+          description: "A clear and non-technical summary of what caused the error and what it means.",
+        },
+      },
+      required: ["explanation"],
+    },
+  };
+}
+
+
 export function CreatePlaywrightSelector() {
   const playwrightSelectorJSON = {
     name: "create_playwright_selector_json",
