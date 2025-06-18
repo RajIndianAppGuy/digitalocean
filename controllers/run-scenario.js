@@ -4,6 +4,7 @@ import { analyzeScreenshot } from "../config/vision-api.js";
 import {
   getFullyRenderedContent,
   getSelector,
+  getUserFriendlyErrorMessage,
   highlightElement,
 } from "../utils/helper.js";
 import { updateTest, fetchTest, createStreamRun, updateStreamRun } from "../supabase/tables.js";
@@ -139,6 +140,8 @@ async function executeSteps(
 
   // Use a deep clone of the steps to avoid modifying the original array
   const clonedSteps = deepClone(steps);
+  
+
 
   console.log(
     `Starting execution for ${testId} with name ${name} and steps:`,
@@ -147,6 +150,7 @@ async function executeSteps(
 
   for (let index = 0; index < clonedSteps.length; index++) {
     const step = clonedSteps[index]; // Access the cloned steps
+    
 
     console.log("=======================================>", page.url());
     if (page.url().includes("google")) {
@@ -352,6 +356,7 @@ async function executeSteps(
 
           screenShots.push(screenshotUrlbeforeInput);
 
+
           // Use performWithRetry for fill action
           await performWithRetry(
             page,
@@ -499,86 +504,67 @@ export default async function RunScenario(req, res) {
 
   // Function to send error email
   const sendErrorEmail = async (error, testInfo, logs) => {
-    // Format error message to be more user-friendly
-    const formatErrorMessage = (error) => {
-      if (!error.message) return 'An unknown error occurred';
-      
-      // Handle Playwright timeout errors
-      if (error.message.includes('Timeout') && error.message.includes('exceeded')) {
-        const actionMatch = error.message.match(/Failed to execute (\w+) for step (.*?) after/);
-        if (actionMatch) {
-          const [_, action, step] = actionMatch;
-          return `The test couldn't ${action} on "${step}" because the element wasn't ready in time. This usually means the element was either not visible, disabled, or the page was still loading.`;
-        }
-      }
-      
-      // Handle element not found errors
-      if (error.message.includes('No elements found matching selector')) {
-        const selectorMatch = error.message.match(/selector: (.*?)$/);
-        if (selectorMatch) {
-          return `The test couldn't find the element "${selectorMatch[1]}" on the page. This could mean the element was removed or the page structure changed.`;
-        }
-      }
-      
-      // Handle element not enabled errors
-      if (error.message.includes('element is not enabled')) {
-        return 'The test tried to interact with an element that was disabled or not ready for interaction. This could be because the element was not fully loaded or was temporarily disabled.';
-      }
-      
-      // For other errors, return a simplified version
-      return error.message.split('\n')[0]; // Take just the first line of the error
-    };
+  const rawMessage = error?.message || 'Unknown error occurred';
 
-    const errorEmailTemplate = `
-      <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
-        <div style="background-color: #f44336; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
-          <h1 style="margin: 0;">Test Execution Failed</h1>
-          <p style="margin: 5px 0 0 0;">${testInfo.name}</p>
-        </div>
-        
-        <div style="background-color: white; padding: 20px; border-radius: 0 0 5px 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-          <div style="margin-bottom: 20px;">
-            <h2 style="color: #333; margin-bottom: 10px;">Error Details</h2>
-            <div style="background-color: #ffebee; padding: 15px; border-radius: 5px; border-left: 4px solid #f44336;">
-              <p style="margin: 5px 0; color: #d32f2f;"><strong>Error Message:</strong> ${formatErrorMessage(error)}</p>
-              <p style="margin: 5px 0;"><strong>Test ID:</strong> ${testInfo.testId}</p>
-              <p style="margin: 5px 0;"><strong>Start URL:</strong> ${testInfo.startUrl}</p>
-              <p style="margin: 5px 0;"><strong>Failure Time:</strong> ${new Date().toLocaleString()}</p>
-            </div>
-          </div>
+  // Get explanation via OpenAI
+  let userFriendlyMessage = "Something went wrong during the test.";
+  try {
+    userFriendlyMessage = await getUserFriendlyErrorMessage(rawMessage, tokenTracker);
+  } catch (openAiError) {
+    console.error("OpenAI error explanation failed:", openAiError);
+  }
 
-          <div>
-            <h2 style="color: #333; margin-bottom: 10px;">Execution Logs</h2>
-            ${logs.map(log => `
-              <div style="margin: 10px 0; padding: 10px; border-left: 4px solid ${getStatusColor(log.status)}; background-color: #f8f9fa;">
-                <div style="display: flex; align-items: center;">
-                  <span style="margin-right: 10px;">${getStatusIcon(log.status)}</span>
-                  <span style="color: ${getStatusColor(log.status)}; font-weight: bold;">${log.status.toUpperCase()}</span>
-                  <span style="margin-left: auto; color: #666; font-size: 0.9em;">${log.timestamp}</span>
-                </div>
-                <p style="margin: 5px 0 0 0; color: #333;">${log.message}</p>
-              </div>
-            `).join('')}
-          </div>
-        </div>
-
-        <div style="text-align: center; margin-top: 20px; color: #666; font-size: 0.9em;">
-          <p>This is an automated error report generated by MagicSlides Test Runner</p>
-        </div>
+  const errorEmailTemplate = `
+    <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
+      <div style="background-color: #f44336; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
+        <h1 style="margin: 0;">Test Execution Failed</h1>
+        <p style="margin: 5px 0 0 0;">${testInfo.name}</p>
       </div>
-    `;
+      
+      <div style="background-color: white; padding: 20px; border-radius: 0 0 5px 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+        <h2 style="color: #333;">Reason</h2>
+        <p style="margin: 10px 0; font-size: 1em; color: #333;">${userFriendlyMessage}</p>
+        
+        <h2 style="color: #333; margin-top: 20px;">Raw Error Details</h2>
+        <div style="background-color: #ffebee; padding: 15px; border-radius: 5px; border-left: 4px solid #f44336;">
+          <p style="margin: 5px 0; color: #d32f2f;"><strong>Raw Error:</strong> ${rawMessage}</p>
+          <p style="margin: 5px 0;"><strong>Test ID:</strong> ${testInfo.testId}</p>
+          <p style="margin: 5px 0;"><strong>Start URL:</strong> ${testInfo.startUrl}</p>
+          <p style="margin: 5px 0;"><strong>Failure Time:</strong> ${new Date().toLocaleString()}</p>
+        </div>
 
-    try {
-      await resend.emails.send({
-        from: "support@magicslides.io",
-        to: testInfo.email,
-        subject: `Test Execution Failed: ${testInfo.name}`,
-        html: errorEmailTemplate
-      });
-    } catch (emailError) {
-      console.error('Failed to send error email:', emailError);
-    }
-  };
+        <h2 style="color: #333; margin-top: 20px;">Execution Logs</h2>
+        ${logs.map(log => `
+          <div style="margin: 10px 0; padding: 10px; border-left: 4px solid ${getStatusColor(log.status)}; background-color: #f8f9fa;">
+            <div style="display: flex; align-items: center;">
+              <span style="margin-right: 10px;">${getStatusIcon(log.status)}</span>
+              <span style="color: ${getStatusColor(log.status)}; font-weight: bold;">${log.status.toUpperCase()}</span>
+              <span style="margin-left: auto; color: #666; font-size: 0.9em;">${log.timestamp}</span>
+            </div>
+            <p style="margin: 5px 0 0 0; color: #333;">${log.message}</p>
+          </div>
+        `).join('')}
+      </div>
+
+      <div style="text-align: center; margin-top: 20px; color: #666; font-size: 0.9em;">
+        <p>This is an automated error report generated by MagicSlides Test Runner</p>
+      </div>
+    </div>
+  `;
+
+  try {
+    await resend.emails.send({
+      from: "support@magicslides.io",
+      to: testInfo.email,
+      subject: `Test Execution Failed: ${testInfo.name}`,
+      html: errorEmailTemplate,
+    });
+  } catch (emailError) {
+    console.error('Failed to send error email:', emailError);
+  }
+};
+
+
 
   try {
     let { startUrl, name, steps, testId, email, runId: requestRunId } = req.body;
@@ -592,10 +578,7 @@ export default async function RunScenario(req, res) {
       email: email || 'Unknown'
     };
 
-    // Set a timeout for the entire execution (30 minutes)
-    executionTimeout = setTimeout(() => {
-      throw new Error('Test execution timed out after 30 minutes');
-    }, 30 * 60 * 1000);
+
 
     // Initialize stream run in Supabase
     await createStreamRun(runId);
