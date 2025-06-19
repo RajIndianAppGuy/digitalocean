@@ -503,66 +503,73 @@ export default async function RunScenario(req, res) {
   };
 
   // Function to send error email
-  const sendErrorEmail = async (error, testInfo, logs) => {
-  const rawMessage = error?.message || 'Unknown error occurred';
+  const sendErrorEmail = async (error, testInfo, logs, screenShots) => {
+    const rawMessage = error?.message || 'Unknown error occurred';
 
-  // Get explanation via OpenAI
-  let userFriendlyMessage = "Something went wrong during the test.";
-  try {
-    userFriendlyMessage = await getUserFriendlyErrorMessage(rawMessage, tokenTracker);
-  } catch (openAiError) {
-    console.error("OpenAI error explanation failed:", openAiError);
-  }
+    // Get explanation via OpenAI
+    let userFriendlyMessage = "Something went wrong during the test.";
+    try {
+      userFriendlyMessage = await getUserFriendlyErrorMessage(rawMessage, tokenTracker);
+    } catch (openAiError) {
+      console.error("OpenAI error explanation failed:", openAiError);
+    }
 
-  const errorEmailTemplate = `
-    <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
-      <div style="background-color: #f44336; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
-        <h1 style="margin: 0;">Test Execution Failed</h1>
-        <p style="margin: 5px 0 0 0;">${testInfo.name}</p>
-      </div>
-      
-      <div style="background-color: white; padding: 20px; border-radius: 0 0 5px 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-        <h2 style="color: #333;">Reason</h2>
-        <p style="margin: 10px 0; font-size: 1em; color: #333;">${userFriendlyMessage}</p>
+    const errorEmailTemplate = `
+      <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
+        <div style="background-color: #f44336; color: white; padding: 20px; border-radius: 5px 5px 0 0;">
+          <h1 style="margin: 0;">Test Execution Failed</h1>
+          <p style="margin: 5px 0 0 0;">${testInfo.name}</p>
+        </div>
         
-        <h2 style="color: #333; margin-top: 20px;">Raw Error Details</h2>
-        <div style="background-color: #ffebee; padding: 15px; border-radius: 5px; border-left: 4px solid #f44336;">
-          <p style="margin: 5px 0; color: #d32f2f;"><strong>Raw Error:</strong> ${rawMessage}</p>
-          <p style="margin: 5px 0;"><strong>Test ID:</strong> ${testInfo.testId}</p>
-          <p style="margin: 5px 0;"><strong>Start URL:</strong> ${testInfo.startUrl}</p>
-          <p style="margin: 5px 0;"><strong>Failure Time:</strong> ${new Date().toLocaleString()}</p>
+        <div style="background-color: white; padding: 20px; border-radius: 0 0 5px 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
+          <h2 style="color: #333;">Reason</h2>
+          <p style="margin: 10px 0; font-size: 1em; color: #333;">${userFriendlyMessage}</p>
+          
+          <h2 style="color: #333; margin-top: 20px;">Raw Error Details</h2>
+          <div style="background-color: #ffebee; padding: 15px; border-radius: 5px; border-left: 4px solid #f44336;">
+            <p style="margin: 5px 0; color: #d32f2f;"><strong>Raw Error:</strong> ${rawMessage}</p>
+            <p style="margin: 5px 0;"><strong>Test ID:</strong> ${testInfo.testId}</p>
+            <p style="margin: 5px 0;"><strong>Start URL:</strong> ${testInfo.startUrl}</p>
+            <p style="margin: 5px 0;"><strong>Failure Time:</strong> ${new Date().toLocaleString()}</p>
+          </div>
+
+          ${screenShots && screenShots.length > 0 ? `
+            <div style="margin-bottom: 20px;">
+              <h2 style="color: #333; margin-bottom: 10px;">Last Screenshot Before Error</h2>
+              <img src="${screenShots[screenShots.length - 1]}" alt="Last Screenshot" style="max-width: 100%; border-radius: 5px; border: 1px solid #ccc;" />
+            </div>
+          ` : ''}
+
+          <h2 style="color: #333; margin-top: 20px;">Execution Logs</h2>
+          ${logs.map(log => `
+            <div style="margin: 10px 0; padding: 10px; border-left: 4px solid ${getStatusColor(log.status)}; background-color: #f8f9fa;">
+              <div style="display: flex; align-items: center;">
+                <span style="margin-right: 10px;">${getStatusIcon(log.status)}</span>
+                <span style="color: ${getStatusColor(log.status)}; font-weight: bold;">${log.status.toUpperCase()}</span>
+                <span style="margin-left: auto; color: #666; font-size: 0.9em;">${log.timestamp}</span>
+              </div>
+              <p style="margin: 5px 0 0 0; color: #333;">${log.message}</p>
+            </div>
+          `).join('')}
         </div>
 
-        <h2 style="color: #333; margin-top: 20px;">Execution Logs</h2>
-        ${logs.map(log => `
-          <div style="margin: 10px 0; padding: 10px; border-left: 4px solid ${getStatusColor(log.status)}; background-color: #f8f9fa;">
-            <div style="display: flex; align-items: center;">
-              <span style="margin-right: 10px;">${getStatusIcon(log.status)}</span>
-              <span style="color: ${getStatusColor(log.status)}; font-weight: bold;">${log.status.toUpperCase()}</span>
-              <span style="margin-left: auto; color: #666; font-size: 0.9em;">${log.timestamp}</span>
-            </div>
-            <p style="margin: 5px 0 0 0; color: #333;">${log.message}</p>
-          </div>
-        `).join('')}
+        <div style="text-align: center; margin-top: 20px; color: #666; font-size: 0.9em;">
+          <p>This is an automated error report generated by MagicSlides Test Runner</p>
+        </div>
       </div>
+    `;
 
-      <div style="text-align: center; margin-top: 20px; color: #666; font-size: 0.9em;">
-        <p>This is an automated error report generated by MagicSlides Test Runner</p>
-      </div>
-    </div>
-  `;
-
-  try {
-    await resend.emails.send({
-      from: "support@magicslides.io",
-      to: testInfo.email,
-      subject: `Test Execution Failed: ${testInfo.name}`,
-      html: errorEmailTemplate,
-    });
-  } catch (emailError) {
-    console.error('Failed to send error email:', emailError);
-  }
-};
+    try {
+      await resend.emails.send({
+        from: "support@magicslides.io",
+        to: testInfo.email,
+        subject: `Test Execution Failed: ${testInfo.name}`,
+        html: errorEmailTemplate,
+      });
+    } catch (emailError) {
+      console.error('Failed to send error email:', emailError);
+    }
+  };
 
 
 
@@ -591,7 +598,7 @@ export default async function RunScenario(req, res) {
     if (!startUrl || !steps || !name) {
       const error = new Error("Missing required parameters");
       try {
-        await sendErrorEmail(error, testInfo, logs);
+        await sendErrorEmail(error, testInfo, logs, screenShots);
         await addLog("Error: Missing required parameters", "error");
       } catch (logError) {
         console.error('Error in error handling:', logError);
@@ -682,6 +689,13 @@ export default async function RunScenario(req, res) {
               </div>
             </div>
 
+            ${screenShots.length > 0 ? `
+              <div style="margin-bottom: 20px;">
+                <h2 style="color: #333; margin-bottom: 10px;">Last Screenshot</h2>
+                <img src="${screenShots[screenShots.length - 1]}" alt="Last Screenshot" style="max-width: 100%; border-radius: 5px; border: 1px solid #ccc;" />
+              </div>
+            ` : ''}
+
             <div>
               <h2 style="color: #333; margin-bottom: 10px;">Execution Logs</h2>
               ${logs.map(log => `
@@ -747,7 +761,7 @@ export default async function RunScenario(req, res) {
       }
 
       try {
-        await sendErrorEmail(error, testInfo, logs);
+        await sendErrorEmail(error, testInfo, logs, screenShots);
         await addLog(`Error during test execution: ${error.message}`, "error");
         
         // Update the final state in Supabase before sending response
@@ -774,7 +788,7 @@ export default async function RunScenario(req, res) {
     }
   } catch (error) {
     try {
-      await sendErrorEmail(error, testInfo, logs);
+      await sendErrorEmail(error, testInfo, logs, screenShots);
       await addLog(`Fatal error in run scenario: ${error.message}`, "error");
       
       // Update the final state in Supabase before sending response
