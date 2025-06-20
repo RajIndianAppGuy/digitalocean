@@ -25,7 +25,7 @@ async function generateEmbeddingWithRetry(text, tokenTracker, maxRetries = 5) {
         "https://api.openai.com/v1/embeddings",
         {
           input: text,
-          model: "text-embedding-3-small",
+          model: "text-embedding-ada-002",
         },
         {
           headers: {
