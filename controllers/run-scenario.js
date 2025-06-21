@@ -150,8 +150,6 @@ async function executeSteps(
   // Use a deep clone of the steps to avoid modifying the original array
   const clonedSteps = deepClone(steps);
   
-
-
   console.log(
     `Starting execution for ${testId} with name ${name} and steps:`,
     clonedSteps
@@ -160,7 +158,6 @@ async function executeSteps(
   for (let index = 0; index < clonedSteps.length; index++) {
     const step = clonedSteps[index]; // Access the cloned steps
     
-
     console.log("=======================================>", page.url());
     if (page.url().includes("google")) {
       // Email input
@@ -179,74 +176,17 @@ async function executeSteps(
         });
       }
     }
-    if (
-      page.url() !== currentUrl &&
-      count !== 0 &&
-      !page.url().includes("google")
-    ) {
+    
+    // Update current URL and add it to step for potential fallback embedding approach
+    if (page.url() !== currentUrl) {
       currentUrl = page.url();
-      try {
-        const content = await getFullyRenderedContent(currentUrl);
-        addLog(`Reading page`, "info");
-        const res1 = await axios.post(
-          `${process.env.DOMAIN_NAME}/embbeding`,
-          { content, url: currentUrl },
-          { maxContentLength: Infinity, maxBodyLength: Infinity }
-        );
-
-        console.log("Embedding Response:======================================================================>", res1.data);
-
-        // Update the main token tracker with embedding usage
-        if (res1.data.tokens) {
-          console.log("Adding embedding tokens to main tracker:", res1.data.tokens);
-          // Create a response object that matches the expected format
-          const usageResponse = {
-            data: {
-              usage: {
-                prompt_tokens: res1.data.tokens,
-                completion_tokens: 0,
-                total_tokens: res1.data.tokens
-              }
-            }
-          };
-          
-          tokenTracker.addUsage(usageResponse, "text-embedding-ada-002", false, {
-            type: "Embedding",
-            description: `Embedding for URL: ${currentUrl}`
-          });
-          
-          // Log the main tracker state after update
-          console.log("Main token tracker state after embedding:", tokenTracker.getUsage());
-        } else {
-          console.log("No tokens found in embedding response");
-        }
-
-        addLog(`Reading page`, "success");
-
-        const slug = res1.data.slug;
-        if (
-          step.actionType !== "AI Visual Assertion" &&
-          step.actionType !== "Delay" &&
-          step.actionType !== "Import Reusable Test"
-        ) {
-          const text =
-            step.actionType === "Click Element"
-              ? step.details.element
-              : step.details.description;
-          const res2 = await axios.post(
-            `${process.env.DOMAIN_NAME}/findChunks`,
-            { slug, text },
-            { maxContentLength: Infinity, maxBodyLength: Infinity }
-          );
-          step.chunk = res2.data.data;
-        }
-      } catch (error) {
-        console.error("Error in embedding step:", error);
-        addLog(`Error in updating step: ${error.message}`, "error");
-        throw new Error(`Error in updating step: ${error.message}`);
-      }
-    } else {
-      count++;
+    }
+    step.currentUrl = currentUrl; // Add current URL to step for fallback embedding approach
+    
+    // Initialize imageOnlyAttempted flag if not already set
+    if (step.imageOnlyAttempted === undefined) {
+      step.imageOnlyAttempted = false;
+      console.log(`Initialized imageOnlyAttempted to false for step ${step.id}`);
     }
 
     try {
@@ -260,16 +200,21 @@ async function executeSteps(
             runId
           );
           if (!step.cache) {
+            // Ensure current URL is set in step for potential fallback embedding approach
+            step.currentUrl = page.url();
+            
+            console.log(`Initial getSelector call - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`);
+            
             const initialClickSelector = await getSelector(
               step,
               name,
               clickImage,
               '',
               tokenTracker,
-              { type: 'Click Element', description: step.details.element }
+              { type: 'Click Element', description: step.details.element },
+              false // isRetryDueToFailedSelector = false
             );
             step.selector = initialClickSelector.selector;
-            delete step.chunk;
 
             // Update the cloned steps and avoid mutating the original steps array
             console.log(
@@ -333,16 +278,21 @@ async function executeSteps(
             runId
           );
           if (!step.cache) {
+            // Ensure current URL is set in step for potential fallback embedding approach
+            step.currentUrl = page.url();
+            
+            console.log(`Initial getSelector call (Fill Input) - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`);
+            
             const initialFillSelector = await getSelector(
               step,
               name,
               inputImage,
               '',
               tokenTracker,
-              { type: 'Fill Input', description: step.details.description }
+              { type: 'Fill Input', description: step.details.description },
+              false // isRetryDueToFailedSelector = false
             );
             step.selector = initialFillSelector.selector;
-            delete step.chunk;
 
             // Update the cloned steps
             console.log(
@@ -457,6 +407,7 @@ async function executeSteps(
           addLog(`Unknown action type: ${step.actionType}`, "error");
           throw new Error(`Unknown action type: ${step.actionType}`);
       }
+
     } catch (error) {
       addLog(`Error in step ${index + 1}: ${error.message}`, "error");
       throw error;
@@ -840,15 +791,25 @@ async function performWithRetry(
 
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
+      // Update current URL in step for potential fallback embedding approach
+      step.currentUrl = page.url();
+      
       // Validate selector before proceeding
       if (!step.selector || step.selector.trim() === '') {
         console.log('Empty selector detected, fetching new selector...');
+        const stepInfo = {
+          type: step.actionType,
+          description: step.actionType === "Click Element" ? step.details.element : step.details.description,
+          attempt: attempt
+        };
         const selectorObject = await getSelector(
           step,
           name,
           screenshot,
           errmsg,
-          tokenTracker
+          tokenTracker,
+          stepInfo,
+          true // isRetryDueToFailedSelector = true (this is a retry due to failed selector)
         );
         step.selector = selectorObject.selector;
         step.cache = false;
@@ -920,7 +881,11 @@ async function performWithRetry(
       if (stepIndex !== -1) {
         clonedSteps[stepIndex].cache = true;
         clonedSteps[stepIndex].selector = step.selector;
-        // Update the test in the database with the new cache status
+        // Preserve the imageOnlyAttempted flag
+        clonedSteps[stepIndex].imageOnlyAttempted = step.imageOnlyAttempted;
+        
+        // Update the database with the final working selector
+        console.log(`Updating database with final working selector: ${step.selector}`);
         await updateTest(testId, clonedSteps);
       }
       
@@ -949,13 +914,26 @@ async function performWithRetry(
 
       if (attempt < retries) {
         console.log(`Retrying to fetch selector for step ${step.selector}...`);
+        console.log(`Before retry - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`);
         try {
+          // Update current URL in step for potential fallback embedding approach
+          step.currentUrl = page.url();
+          
+          const stepInfo = {
+            type: step.actionType,
+            description: step.actionType === "Click Element" ? step.details.element : step.details.description,
+            attempt: attempt + 1,
+            retry: true
+          };
+          
           const selectorObject = await getSelector(
             step,
             name,
             screenshot,
             errmsg,
-            tokenTracker
+            tokenTracker,
+            stepInfo,
+            true // isRetryDueToFailedSelector = true (this is a retry due to failed selector)
           );
           if (!selectorObject || !selectorObject.selector) {
             throw new Error('Failed to get valid selector from getSelector');
@@ -964,11 +942,20 @@ async function performWithRetry(
           // Reset cache when retrying with new selector
           step.cache = false;
           
+          console.log(`After retry - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`);
+          
           // Update the cache in the main steps array
           const stepIndex = clonedSteps.findIndex(s => s.id === step.id);
           if (stepIndex !== -1) {
             clonedSteps[stepIndex].cache = false;
             clonedSteps[stepIndex].selector = step.selector;
+            // Preserve the imageOnlyAttempted flag
+            clonedSteps[stepIndex].imageOnlyAttempted = step.imageOnlyAttempted;
+            console.log(`Updated clonedSteps[${stepIndex}].imageOnlyAttempted to: ${clonedSteps[stepIndex].imageOnlyAttempted}`);
+            
+            // Update the database with the new selector
+            console.log(`Updating database with new selector: ${step.selector}`);
+            await updateTest(testId, clonedSteps);
           }
         } catch (errormsg) {
           errmsg = errormsg;
