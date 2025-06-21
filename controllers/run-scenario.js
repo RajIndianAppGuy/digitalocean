@@ -10,6 +10,7 @@ import {
 import { updateTest, fetchTest, createStreamRun, updateStreamRun } from "../supabase/tables.js";
 import TokenTracker from "../utils/tokenTracker.js";
 import { Resend } from "resend";
+import { supabase } from "../utils/SupabaseClient.js";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -39,36 +40,44 @@ function deepClone(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
 
-// Capture and store a screenshot
+// Capture and store a screenshot directly to Supabase
 async function captureAndStoreScreenshot(page, testId, stepId, runId) {
   try {
     const screenshotBuffer = await page.screenshot({
       fullPage: false,
       timeout: 300000,
     });
-    const base64Screenshot = screenshotBuffer.toString("base64");
 
-    const frontendUrl =
-      process.env.FRONTEND_URL || "https://www.browsingbee.com";
+    // Generate a unique filename
+    const fileName = `${testId}_step${stepId || 'final'}_${Date.now()}.png`;
 
-    const response = await axios.post(`${frontendUrl}/api/screenshot`, {
-      testId,
-      stepId,
-      screenshotData: base64Screenshot,
-    },{
-      maxBodyLength: Infinity,
-      maxContentLength: Infinity,
-    });
+    // Upload to Supabase storage
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from("screenshots")
+      .upload(fileName, screenshotBuffer, {
+        contentType: "image/png",
+      });
 
-    console.log("Screenshot Captured");
+    if (uploadError) throw uploadError;
+
+    // Get public URL
+    const { data: urlData } = supabase.storage
+      .from("screenshots")
+      .getPublicUrl(fileName);
+
+    if (!urlData) throw new Error("Failed to get public URL");
+
+    const publicUrl = urlData.publicUrl;
+
+    console.log("Screenshot Captured and stored:", publicUrl);
     
     // Update screenshot in Supabase
-    await updateStreamRun(runId, { screenshot: response.data.screenshotUrl });
+    await updateStreamRun(runId, { screenshot: publicUrl });
     
-    return response.data.screenshotUrl;
+    return publicUrl;
   } catch (error) {
     console.error(
-      `Error capturing/sending screenshot for step ${stepId}:`,
+      `Error capturing/storing screenshot for step ${stepId}:`,
       error
     );
     throw error;
@@ -201,7 +210,7 @@ async function executeSteps(
             }
           };
           
-          tokenTracker.addUsage(usageResponse, "text-embedding-3-small", false, {
+          tokenTracker.addUsage(usageResponse, "text-embedding-ada-002", false, {
             type: "Embedding",
             description: `Embedding for URL: ${currentUrl}`
           });
@@ -977,3 +986,7 @@ async function performWithRetry(
 
   return step;
 }
+
+
+
+
