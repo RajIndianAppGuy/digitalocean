@@ -159,23 +159,23 @@ async function executeSteps(
     const step = clonedSteps[index]; // Access the cloned steps
     
     console.log("=======================================>", page.url());
-    if (page.url().includes("google")) {
-      // Email input
-      await page.fill('input[type="email"]', "raj@indianappguy.com");
-      await page.click('button:has-text("Next")');
+    // if (page.url().includes("google")) {
+    //   // Email input
+    //   await page.fill('input[type="email"]', "raj@indianappguy.com");
+    //   await page.click('button:has-text("Next")');
 
-      // Wait for password field and fill
-      await page.waitForSelector('input[type="password"]', { timeout: 5000 });
-      await page.fill('input[type="password"]', "Rajdama@1234");
-      await page.click('button:has-text("Next")');
+    //   // Wait for password field and fill
+    //   await page.waitForSelector('input[type="password"]', { timeout: 5000 });
+    //   await page.fill('input[type="password"]', "Rajdama@1234");
+    //   await page.click('button:has-text("Next")');
 
-      if (!page.url().includes("magicslides.app")) {
-        await page.goto("https://www.magicslides.app/", {
-          timeout: 60000,
-          waitUntil: "networkidle",
-        });
-      }
-    }
+    //   if (!page.url().includes("magicslides.app")) {
+    //     await page.goto("https://www.magicslides.app/", {
+    //       timeout: 60000,
+    //       waitUntil: "networkidle",
+    //     });
+    //   }
+    // }
     
     // Update current URL and add it to step for potential fallback embedding approach
     if (page.url() !== currentUrl) {
