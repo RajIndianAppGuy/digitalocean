@@ -7,6 +7,8 @@ import {
   userMessageToOpenAI,
   userMessageToOpenAIWithEmbedding,
 } from "./prompt.js";
+import { Stagehand } from "@browserbasehq/stagehand";
+import { z } from "zod";
 
 import openai from "../config/openai.js"; // Assuming this is your OpenAI client instance
 
@@ -54,8 +56,33 @@ export async function getUserFriendlyErrorMessage(rawErrorText, tokenTracker = n
   return parsed.explanation;
 }
 
+// Helper to get selector using Stagehand
+async function getSelectorWithStagehand(url, description) {
+  const stagehand = new Stagehand({
+    env:  "LOCAL",
+    modelName: "gpt-4o",
+    localBrowserLaunchOptions:{
+headless:true
+    },
+    modelClientOptions: {
+      apiKey: process.env.OPENAI_KEY,
+    },
+  });
+  await stagehand.init();
+  const page = stagehand.page;
+  await page.goto(url);
 
-export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, stepInfo = null, isRetryDueToFailedSelector = false) => {
+
+  const observations = await page.observe({
+    instruction: `Find the element ${description}`,
+  });
+  await stagehand.close();
+  
+  return observations[0]?.selector;
+}
+
+export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, stepInfo = null, isRetryDueToFailedSelector = false, forceImageOnly = false) => {
+  step.imageOnlyAttempted = false;
   const funcitonTools = CreatePlaywrightSelector();
   const model = process.env.OPENAI_MODEL || "gpt-4o"; // Default to gpt-4o if not specified
   
@@ -64,9 +91,9 @@ export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, 
   
   console.log(`getSelector called - imageOnlyAttempted: ${hasTriedImageOnly}, isRetryDueToFailedSelector: ${isRetryDueToFailedSelector}, stepInfo:`, stepInfo);
   
-  // If this is a retry due to a failed selector, mark image-only as attempted and go directly to embedding
+  // If this is a retry due to a failed selector, mark image-only as attempted and go directly to Stagehand
   if (isRetryDueToFailedSelector) {
-    console.log("Retry due to failed selector detected, switching to embedding-based approach...");
+    console.log("Retry due to failed selector detected, switching to Stagehand-based approach...");
     step.imageOnlyAttempted = true;
   }
   
@@ -110,17 +137,30 @@ export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, 
       );
       return JSON.parse(response.data.choices[0].message.function_call.arguments);
     } catch (error) {
-      console.log("Image-only approach failed, falling back to embedding-based approach...");
+      console.log("Image-only approach failed, falling back to Stagehand-based approach...");
       console.error("Image-only error:", error.message);
       
       // Mark that we've tried image-only approach
       step.imageOnlyAttempted = true;
       console.log(`Set imageOnlyAttempted to true for step ${step.id}`);
       
-      // Continue to embedding-based approach
+      // Continue to Stagehand-based approach
     }
   } else {
-    console.log("Image-only approach already attempted, using embedding-based approach directly...");
+    console.log("Image-only approach already attempted, using Stagehand-based approach directly...");
+  }
+  
+  // Second attempt: Stagehand-based approach
+  try {
+    let currentUrl = step.currentUrl;
+
+    const selector = await getSelectorWithStagehand(currentUrl, step.details.description);
+    // Return in the same format as other approaches
+    console.log("Stagehand selector generated:", selector);
+    return { selector };
+  } catch (stagehandError) {
+    console.error("Stagehand-based approach failed, falling back to embedding-based approach...", stagehandError.message);
+    // Continue to embedding-based approach
   }
   
   // Fallback: Use embedding-based approach
@@ -128,18 +168,6 @@ export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, 
     // Get the current URL to generate embeddings
     let currentUrl = step.currentUrl;
     
-    // If currentUrl is not available, try to extract from screenshot URL or use a default
-    if (!currentUrl) {
-      // Try to extract URL from screenshot URL if it's a Supabase URL
-      if (screenshotUrl && screenshotUrl.includes('supabase.co')) {
-        // Extract the base URL from the screenshot URL
-        const urlMatch = screenshotUrl.match(/https:\/\/[^\/]+/);
-        currentUrl = urlMatch ? urlMatch[0] : 'https://www.magicslides.app/';
-      } else {
-        currentUrl = 'https://www.magicslides.app/'; // Default fallback
-      }
-      console.log(`Using fallback URL for embedding: ${currentUrl}`);
-    }
     
     // Generate embeddings for the current page
     const content = await getFullyRenderedContent(currentUrl);
