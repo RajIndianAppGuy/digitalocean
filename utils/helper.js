@@ -8,7 +8,6 @@ import {
   userMessageToOpenAIWithEmbedding,
 } from "./prompt.js";
 import { Stagehand } from "@browserbasehq/stagehand";
-import { z } from "zod";
 
 import openai from "../config/openai.js"; // Assuming this is your OpenAI client instance
 
@@ -86,18 +85,26 @@ export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, 
   const funcitonTools = CreatePlaywrightSelector();
   const model = process.env.OPENAI_MODEL || "gpt-4o"; // Default to gpt-4o if not specified
   
-  // Check if we've already tried image-only approach for this step
-  const hasTriedImageOnly = step.imageOnlyAttempted || false;
-  
-  console.log(`getSelector called - imageOnlyAttempted: ${hasTriedImageOnly}, isRetryDueToFailedSelector: ${isRetryDueToFailedSelector}, stepInfo:`, stepInfo);
-  
-  // If this is a retry due to a failed selector, mark image-only as attempted and go directly to Stagehand
+  console.log(`getSelector called - imageOnlyAttempted: ${step.imageOnlyAttempted || false}, isRetryDueToFailedSelector: ${isRetryDueToFailedSelector}, stepInfo:`, stepInfo);
+
+  // If this is a retry due to a failed selector, skip image-only and go directly to Stagehand
   if (isRetryDueToFailedSelector) {
     console.log("Retry due to failed selector detected, switching to Stagehand-based approach...");
     step.imageOnlyAttempted = true;
+    try {
+      let currentUrl = step.currentUrl;
+      const selector = await getSelectorWithStagehand(currentUrl, step.details.description);
+      // Return in the same format as other approaches
+      console.log("Stagehand selector generated:", selector);
+      return { selector };
+    } catch (stagehandError) {
+      console.error("Stagehand-based approach failed, falling back to embedding-based approach...", stagehandError.message);
+      // Continue to embedding-based approach
+    }
   }
   
   // If we haven't tried image-only yet, try it first
+  const hasTriedImageOnly = step.imageOnlyAttempted || false;
   if (!hasTriedImageOnly) {
     try {
       console.log("Attempting image-only selector generation...");
@@ -139,11 +146,9 @@ export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, 
     } catch (error) {
       console.log("Image-only approach failed, falling back to Stagehand-based approach...");
       console.error("Image-only error:", error.message);
-      
       // Mark that we've tried image-only approach
       step.imageOnlyAttempted = true;
       console.log(`Set imageOnlyAttempted to true for step ${step.id}`);
-      
       // Continue to Stagehand-based approach
     }
   } else {
@@ -153,7 +158,6 @@ export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, 
   // Second attempt: Stagehand-based approach
   try {
     let currentUrl = step.currentUrl;
-
     const selector = await getSelectorWithStagehand(currentUrl, step.details.description);
     // Return in the same format as other approaches
     console.log("Stagehand selector generated:", selector);
