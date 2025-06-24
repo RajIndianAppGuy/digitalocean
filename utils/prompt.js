@@ -9,8 +9,6 @@ You are provided with the image of a webpage.
 
 - Locate the HTML element that visually or semantically resembles a **clickable button or selectable option**, or matches the element named "${step.details.element}".
 - The target element could be a <button>, <a>, <div>, <span>, or any other element styled to look or behave like a button or selection tile.
-- Prioritize **visually distinct, tile-like elements** if the element name includes phrases like "select", "choose template", "pick slide", or similar.
-- Avoid clicking **primary CTA buttons** like "Continue", "Next", "Enter", etc., unless they explicitly match the desired element label.
 - This is for desktop only: **ignore elements hidden or styled differently for mobile** (e.g., classes like "sm:", "hidden", "md:hidden").
 - When determining the selector:
   - Prefer **stable and meaningful attributes** such as "id", "name", "aria-label", "href", or **non-dynamic class names**.
@@ -19,19 +17,22 @@ You are provided with the image of a webpage.
 - If multiple similar elements are found, rely on the **visual context** (e.g., tile vs. footer button) to choose the best match.
 - Extract a **precise, minimal, and unambiguous Playwright selector** that would click the correct element. Return only the selector.
 
-Ensure that the target is clearly a selection/tile (if applicable), and not a navigation or confirmation button unless explicitly required.`
+Ensure that the target is clearly a selection/tile (if applicable), and not a navigation or confirmation button unless explicitly required.
+If the element "${step.details.element}" or its similar matching not present in image provided, just return n/a
+`
   } else {
     userMessage += `
     You are provided with the image of a webpage:
      Your task is to:
 
 - Identify the HTML element matching the  field named "${step.details.description}".
-- Take help of the image to understand the corresponding chunk for the "${step.details.element}".
 - Extract a unique and valid Playwright selector to **fill** this element.
 - Copy the attribute of the element which you decided to be the Playwright selector **as-is**, without trimming or modifying any character, including leading and trailing whitespaces.
 - Ensure the selector is precise enough to target the correct field without ambiguity, focusing on attributes such as "id", "name", or well-defined classes.
 - Prioritize attributes that are stable and likely to remain unchanged.
 - When using text-based selectors (like placeholder text), make sure to account for **all spaces, including leading and trailing spaces**, to ensure accuracy and avoid trimming or altering the text in any way.
+
+If the element "${step.details.description}" or its similar matching not present in image provided, just return n/a
   `;
   }
 
