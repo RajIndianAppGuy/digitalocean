@@ -1,4 +1,6 @@
 import { supabase } from "../utils/SupabaseClient.js";
+import fs from "fs";
+import path from "path";
 
 export async function checkEmbaddingExists(url) {
   try {
@@ -420,6 +422,55 @@ export async function getStreamRun(runId) {
     return data;
   } catch (error) {
     console.error("Error getting stream run:", error);
+    throw error;
+  }
+}
+
+/**
+ * Uploads a file to the 'files' bucket in Supabase Storage.
+ * @param {string} fileName - The name to use for the file in Supabase.
+ * @param {Buffer|string} fileContent - The file content (Buffer or string).
+ * @returns {Promise<string>} - The public URL of the uploaded file.
+ */
+export async function uploadFileToSupabase(fileName, fileContent) {
+  try {
+    const { data, error } = await supabase.storage
+      .from("files")
+      .upload(fileName, fileContent, {
+        contentType: "application/octet-stream",
+        upsert: false,
+      });
+    if (error) throw error;
+    // Get public URL
+    const { data: urlData } = supabase.storage.from("files").getPublicUrl(fileName);
+    if (!urlData) throw new Error("Failed to get public URL");
+    return urlData.publicUrl;
+  } catch (error) {
+    console.error("Error uploading file to Supabase:", error);
+    throw error;
+  }
+}
+
+/**
+ * Downloads a file from the 'files' bucket in Supabase Storage and saves it to files_storage.
+ * @param {string} fileName - The name of the file in Supabase.
+ * @returns {Promise<string>} - The local path to the saved file.
+ */
+export async function downloadFileFromSupabase(fileName) {
+  try {
+    const { data, error } = await supabase.storage.from("files").download(fileName);
+    if (error) throw error;
+    // Ensure files_storage directory exists
+    const storageDir = path.resolve("files_storage");
+    if (!fs.existsSync(storageDir)) {
+      fs.mkdirSync(storageDir);
+    }
+    const localPath = path.join(storageDir, fileName);
+    // Write file to local storage
+    fs.writeFileSync(localPath, Buffer.from(await data.arrayBuffer()));
+    return localPath;
+  } catch (error) {
+    console.error("Error downloading file from Supabase:", error);
     throw error;
   }
 }
