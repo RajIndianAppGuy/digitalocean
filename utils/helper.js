@@ -55,32 +55,17 @@ export async function getUserFriendlyErrorMessage(rawErrorText, tokenTracker = n
   return parsed.explanation;
 }
 
-// Helper to get selector using Stagehand
-async function getSelectorWithStagehand(url, description) {
-  const stagehand = new Stagehand({
-    env:  "LOCAL",
-    modelName: "gpt-4o",
-    localBrowserLaunchOptions:{
-headless:true
-    },
-    modelClientOptions: {
-      apiKey: process.env.OPENAI_KEY,
-    },
-  });
-  await stagehand.init();
-  const page = stagehand.page;
+// Refactor getSelectorWithStagehand to accept a page object
+async function getSelectorWithStagehand(page, url, description) {
   await page.goto(url);
-
-
   const observations = await page.observe({
     instruction: `Find the element ${description}`,
   });
-  await stagehand.close();
-  
   return observations[0]?.selector;
 }
 
-export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, stepInfo = null, isRetryDueToFailedSelector = false, forceImageOnly = false) => {
+// Update getSelector to accept a page argument and pass it to getSelectorWithStagehand
+export const getSelector = async (page, step, name, screenshotUrl, err, tokenTracker, stepInfo = null, isRetryDueToFailedSelector = false, forceImageOnly = false) => {
   step.imageOnlyAttempted = false;
   const funcitonTools = CreatePlaywrightSelector();
   const model = process.env.OPENAI_MODEL || "gpt-4o"; // Default to gpt-4o if not specified
@@ -93,7 +78,7 @@ export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, 
     step.imageOnlyAttempted = true;
     try {
       let currentUrl = step.currentUrl;
-      const selector = await getSelectorWithStagehand(currentUrl, step.details.description);
+      const selector = await getSelectorWithStagehand(page, currentUrl, step.details.description);
       // Return in the same format as other approaches
       console.log("Stagehand selector generated:", selector);
       return { selector };
@@ -109,6 +94,8 @@ export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, 
     try {
       console.log("Attempting image-only selector generation...");
       let userMessage = userMessageToOpenAI(step, name);
+
+      console.log(userMessage)
       
       const response = await axios.post(
         "https://api.openai.com/v1/chat/completions",
@@ -158,7 +145,7 @@ export const getSelector = async (step, name, screenshotUrl, err, tokenTracker, 
   // Second attempt: Stagehand-based approach
   try {
     let currentUrl = step.currentUrl;
-    const selector = await getSelectorWithStagehand(currentUrl, step.details.description);
+    const selector = await getSelectorWithStagehand(page, currentUrl, step.details.description);
     // Return in the same format as other approaches
     console.log("Stagehand selector generated:", selector);
     return { selector };
