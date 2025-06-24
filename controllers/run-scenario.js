@@ -1,16 +1,16 @@
 import axios from "axios";
-import { chromium } from "playwright";
+import { Stagehand } from "@browserbasehq/stagehand";
 import { analyzeScreenshot } from "../config/vision-api.js";
 import {
-  getFullyRenderedContent,
   getSelector,
   getUserFriendlyErrorMessage,
   highlightElement,
 } from "../utils/helper.js";
-import { updateTest, fetchTest, createStreamRun, updateStreamRun } from "../supabase/tables.js";
+import { updateTest, fetchTest, createStreamRun, updateStreamRun, uploadFileToSupabase, downloadFileFromSupabase } from "../supabase/tables.js";
 import TokenTracker from "../utils/tokenTracker.js";
 import { Resend } from "resend";
 import { supabase } from "../utils/SupabaseClient.js";
+import fs from "fs";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
@@ -41,10 +41,10 @@ function deepClone(obj) {
 }
 
 // Capture and store a screenshot directly to Supabase
-async function captureAndStoreScreenshot(page, testId, stepId, runId) {
+async function captureAndStoreScreenshot(page, testId, stepId, runId, fullPage = false) {
   try {
     const screenshotBuffer = await page.screenshot({
-      fullPage: false,
+      fullPage,
       timeout: 300000,
     });
 
@@ -82,6 +82,57 @@ async function captureAndStoreScreenshot(page, testId, stepId, runId) {
     );
     throw error;
   }
+}
+
+// Helper: Scroll and try image-only selector generation at each scroll position
+async function findSelectorByScrolling(page, step, name, tokenTracker, stepInfo, testId, runId) {
+  const scrollStep = 500; // px
+  let lastScrollTop = -1;
+  let scrollAttempts = 0;
+  const maxScrolls = 20; // Prevent infinite loops
+
+  while (scrollAttempts < maxScrolls) {
+    // Take screenshot at current scroll position
+    const screenshotUrl = await captureAndStoreScreenshot(page, testId, step.id, runId, false);
+    // Try image-only selector
+    try {
+      const result = await getSelector(
+        page,
+        step,
+        name,
+        screenshotUrl,
+        '',
+        tokenTracker,
+        stepInfo,
+        false // isRetryDueToFailedSelector
+      );
+      if (result && result.selector) {
+        return result; // Found!
+      }
+    } catch (e) {
+      // If fails, continue
+    }
+    // Scroll down
+    const scrollTop = await page.evaluate((scrollStep) => {
+      window.scrollBy(0, scrollStep);
+      return window.scrollY;
+    }, scrollStep);
+    // If we can't scroll further, break
+    if (scrollTop === lastScrollTop) break;
+    lastScrollTop = scrollTop;
+    scrollAttempts++;
+  }
+  // Fallback to Stagehand/embedding
+  return await getSelector(
+    page,
+    step,
+    name,
+    null, // No screenshot for fallback
+    '',
+    tokenTracker,
+    stepInfo,
+    true // isRetryDueToFailedSelector = true (triggers Stagehand/embedding)
+  );
 }
 
 // Execute imported test steps independently
@@ -202,20 +253,18 @@ async function executeSteps(
           if (!step.cache) {
             // Ensure current URL is set in step for potential fallback embedding approach
             step.currentUrl = page.url();
-            
             console.log(`Initial getSelector call - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`);
-            
-            const initialClickSelector = await getSelector(
+            // Use scroll-and-screenshot approach
+            const initialClickSelector = await findSelectorByScrolling(
+              page,
               step,
               name,
-              clickImage,
-              '',
               tokenTracker,
               { type: 'Click Element', description: step.details.element },
-              false // isRetryDueToFailedSelector = false
+              testId,
+              runId
             );
             step.selector = initialClickSelector.selector;
-
             // Update the cloned steps and avoid mutating the original steps array
             console.log(
               `Updating testid ${testId} with cloned steps:`,
@@ -223,20 +272,16 @@ async function executeSteps(
             );
             await updateTest(testId, clonedSteps); // Update with cloned steps
           }
-
           await highlightElement(
             page,
             step.selector)
-          
           const screenshotUrlBeforeClick = await captureAndStoreScreenshot(
             page,
             testId,
             step.id,
             runId
           );
-
           screenShots.push(screenshotUrlBeforeClick);
-          
           // Use performWithRetry for click action
           await performWithRetry(
             page,
@@ -253,24 +298,19 @@ async function executeSteps(
             clonedSteps,
             runId
           );
-
           await page.waitForTimeout(4000);
-
           const screenshotUrlAfterClick = await captureAndStoreScreenshot(
             page,
             testId,
             step.id,
             runId
           );
-
           screenShots.push(screenshotUrlAfterClick);
-
           addLog(`Element "${step.details.element}" clicked successfully`, "success");
           break;
 
         case "Fill Input":
           addLog(`Filling input: "${step.details.description}" with value: "${step.details.value}"`, "info");
-
           const inputImage = await captureAndStoreScreenshot(
             page,
             testId,
@@ -280,20 +320,18 @@ async function executeSteps(
           if (!step.cache) {
             // Ensure current URL is set in step for potential fallback embedding approach
             step.currentUrl = page.url();
-            
             console.log(`Initial getSelector call (Fill Input) - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`);
-            
-            const initialFillSelector = await getSelector(
+            // Use scroll-and-screenshot approach
+            const initialFillSelector = await findSelectorByScrolling(
+              page,
               step,
               name,
-              inputImage,
-              '',
               tokenTracker,
               { type: 'Fill Input', description: step.details.description },
-              false // isRetryDueToFailedSelector = false
+              testId,
+              runId
             );
             step.selector = initialFillSelector.selector;
-
             // Update the cloned steps
             console.log(
               `Updating testid ${testId} with cloned steps:`,
@@ -301,21 +339,16 @@ async function executeSteps(
             );
             await updateTest(testId, clonedSteps); // Update with cloned steps
           }
-
           const screenshotUrlbeforeInput = await captureAndStoreScreenshot(
             page,
             testId,
             step.id,
             runId
           );
-
-            await highlightElement(
+          await highlightElement(
             page,
             step.selector)
-
           screenShots.push(screenshotUrlbeforeInput);
-
-
           // Use performWithRetry for fill action
           await performWithRetry(
             page,
@@ -332,14 +365,12 @@ async function executeSteps(
             clonedSteps,
             runId
           );
-
           const screenshotUrlAfterInput = await captureAndStoreScreenshot(
             page,
             testId,
             step.id,
             runId
           );
-
           screenShots.push(screenshotUrlAfterInput);
           addLog(`Input "${step.details.description}" filled successfully`, "success");
           break;
@@ -402,6 +433,53 @@ async function executeSteps(
             addLog(`Skipping nested import of reusable test to prevent recursion`, "warning");
           }
           break;
+
+        case "Upload File": {
+          addLog(`Processing file upload step: ${step.details.description}`, "info");
+          // Screenshot before upload
+          const screenshotUrlBeforeUpload = await captureAndStoreScreenshot(
+            page,
+            testId,
+            step.id,
+            runId
+          );
+          screenShots.push(screenshotUrlBeforeUpload);
+          await page.act(step.details.description);
+          let fileName = step.details.file_content;
+          let localPath = null;
+          if (fileName && typeof fileName === "string") {
+            // file_content is just the file name, download from Supabase
+            localPath = await downloadFileFromSupabase(fileName);
+            await page.act("click to upload");
+            const fileInput = await page.locator('input[type="file"]');
+            await fileInput.setInputFiles(localPath); // Ensure upload is complete
+            // Screenshot after upload
+            const screenshotUrlAfterUpload = await captureAndStoreScreenshot(
+              page,
+              testId,
+              step.id,
+              runId
+            );
+            screenShots.push(screenshotUrlAfterUpload);
+            // Wait a moment to ensure file is not locked
+            await page.waitForTimeout(1000);
+            // Add logging before deletion
+            console.log("Attempting to delete file:", localPath);
+            try {
+              fs.unlinkSync(localPath);
+              console.log("File deleted successfully:", localPath);
+              addLog(`File deleted successfully: ${localPath}`, "success");
+            } catch (err) {
+              console.error(`Failed to delete local file after upload: ${localPath}`, err);
+              addLog(`Failed to delete local file after upload: ${localPath} - ${err.message}`, "error");
+            }
+            addLog(`File upload complete`, "success");
+          } else {
+            addLog(`No valid file name provided for upload step`, "error");
+            throw new Error("No valid file name provided for upload step");
+          }
+          break;
+        }
 
         default:
           addLog(`Unknown action type: ${step.actionType}`, "error");
@@ -573,13 +651,14 @@ export default async function RunScenario(req, res) {
     }
 
     console.log("Starting browser...........");
-    browser = await chromium.launch({ 
-      headless: true, 
-      slowMo: 50,
-      timeout: 30000 // 30 second timeout for browser launch
+    const stagehand = new Stagehand({
+      env: "LOCAL",
+      modelName: "gpt-4o",
+      localBrowserLaunchOptions: { headless: true },
+      modelClientOptions: { apiKey: process.env.OPENAI_KEY },
     });
-    const context = await browser.newContext();
-    const page = await context.newPage();
+    await stagehand.init();
+    const page = stagehand.page;
 
     try {
       await page.goto(startUrl, { timeout: 900000 });
@@ -743,8 +822,7 @@ export default async function RunScenario(req, res) {
     } finally {
       clearTimeout(executionTimeout);
       if (page) await page.close().catch(console.error);
-      if (context) await context.close().catch(console.error);
-      if (browser) await browser.close().catch(console.error);
+      await stagehand.close();
     }
   } catch (error) {
     try {
@@ -803,13 +881,14 @@ async function performWithRetry(
           attempt: attempt
         };
         const selectorObject = await getSelector(
+          page,
           step,
           name,
           screenshot,
           errmsg,
           tokenTracker,
           stepInfo,
-          true // isRetryDueToFailedSelector = true (this is a retry due to failed selector)
+          true // isRetryDueToFailedSelector = true
         );
         step.selector = selectorObject.selector;
         step.cache = false;
@@ -927,13 +1006,14 @@ async function performWithRetry(
           };
           
           const selectorObject = await getSelector(
+            page,
             step,
             name,
             screenshot,
             errmsg,
             tokenTracker,
             stepInfo,
-            true // isRetryDueToFailedSelector = true (this is a retry due to failed selector)
+            true // isRetryDueToFailedSelector = true
           );
           if (!selectorObject || !selectorObject.selector) {
             throw new Error('Failed to get valid selector from getSelector');
