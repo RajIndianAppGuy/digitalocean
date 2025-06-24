@@ -6,7 +6,14 @@ import {
   getUserFriendlyErrorMessage,
   highlightElement,
 } from "../utils/helper.js";
-import { updateTest, fetchTest, createStreamRun, updateStreamRun, uploadFileToSupabase, downloadFileFromSupabase } from "../supabase/tables.js";
+import {
+  updateTest,
+  fetchTest,
+  createStreamRun,
+  updateStreamRun,
+  uploadFileToSupabase,
+  downloadFileFromSupabase,
+} from "../supabase/tables.js";
 import TokenTracker from "../utils/tokenTracker.js";
 import { Resend } from "resend";
 import { supabase } from "../utils/SupabaseClient.js";
@@ -16,22 +23,32 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 // Utility functions for email templates
 const getStatusColor = (status) => {
-  switch(status) {
-    case 'success': return '#4CAF50';
-    case 'error': return '#f44336';
-    case 'warning': return '#ff9800';
-    case 'info': return '#2196F3';
-    default: return '#757575';
+  switch (status) {
+    case "success":
+      return "#4CAF50";
+    case "error":
+      return "#f44336";
+    case "warning":
+      return "#ff9800";
+    case "info":
+      return "#2196F3";
+    default:
+      return "#757575";
   }
 };
 
 const getStatusIcon = (status) => {
-  switch(status) {
-    case 'success': return '✅';
-    case 'error': return '❌';
-    case 'warning': return '⚠️';
-    case 'info': return 'ℹ️';
-    default: return '•';
+  switch (status) {
+    case "success":
+      return "✅";
+    case "error":
+      return "❌";
+    case "warning":
+      return "⚠️";
+    case "info":
+      return "ℹ️";
+    default:
+      return "•";
   }
 };
 
@@ -40,8 +57,22 @@ function deepClone(obj) {
   return JSON.parse(JSON.stringify(obj));
 }
 
+// Helper to push screenshots only if not duplicate of last
+function pushUniqueScreenshot(screenShots, url) {
+  if (!url) return;
+  if (screenShots.length === 0 || screenShots[screenShots.length - 1] !== url) {
+    screenShots.push(url);
+  }
+}
+
 // Capture and store a screenshot directly to Supabase
-async function captureAndStoreScreenshot(page, testId, stepId, runId, fullPage = false) {
+async function captureAndStoreScreenshot(
+  page,
+  testId,
+  stepId,
+  runId,
+  fullPage = false
+) {
   try {
     const screenshotBuffer = await page.screenshot({
       fullPage,
@@ -49,7 +80,7 @@ async function captureAndStoreScreenshot(page, testId, stepId, runId, fullPage =
     });
 
     // Generate a unique filename
-    const fileName = `${testId}_step${stepId || 'final'}_${Date.now()}.png`;
+    const fileName = `${testId}_step${stepId || "final"}_${Date.now()}.png`;
 
     // Upload to Supabase storage
     const { data: uploadData, error: uploadError } = await supabase.storage
@@ -70,10 +101,10 @@ async function captureAndStoreScreenshot(page, testId, stepId, runId, fullPage =
     const publicUrl = urlData.publicUrl;
 
     console.log("Screenshot Captured and stored:", publicUrl);
-    
+
     // Update screenshot in Supabase
     await updateStreamRun(runId, { screenshot: publicUrl });
-    
+
     return publicUrl;
   } catch (error) {
     console.error(
@@ -85,7 +116,15 @@ async function captureAndStoreScreenshot(page, testId, stepId, runId, fullPage =
 }
 
 // Helper: Scroll and try image-only selector generation at each scroll position
-async function findSelectorByScrolling(page, step, name, tokenTracker, stepInfo, testId, runId) {
+async function findSelectorByScrolling(
+  page,
+  step,
+  name,
+  tokenTracker,
+  stepInfo,
+  testId,
+  runId
+) {
   const scrollStep = 500; // px
   let lastScrollTop = -1;
   let scrollAttempts = 0;
@@ -93,7 +132,13 @@ async function findSelectorByScrolling(page, step, name, tokenTracker, stepInfo,
 
   while (scrollAttempts < maxScrolls) {
     // Take screenshot at current scroll position
-    const screenshotUrl = await captureAndStoreScreenshot(page, testId, step.id, runId, false);
+    const screenshotUrl = await captureAndStoreScreenshot(
+      page,
+      testId,
+      step.id,
+      runId,
+      false
+    );
     // Try image-only selector
     try {
       const result = await getSelector(
@@ -101,7 +146,7 @@ async function findSelectorByScrolling(page, step, name, tokenTracker, stepInfo,
         step,
         name,
         screenshotUrl,
-        '',
+        "",
         tokenTracker,
         stepInfo,
         false // isRetryDueToFailedSelector
@@ -128,7 +173,7 @@ async function findSelectorByScrolling(page, step, name, tokenTracker, stepInfo,
     step,
     name,
     null, // No screenshot for fallback
-    '',
+    "",
     tokenTracker,
     stepInfo,
     true // isRetryDueToFailedSelector = true (triggers Stagehand/embedding)
@@ -174,7 +219,7 @@ async function executeImportedTest(
 
     return {
       screenshots: importedTestScreenshots,
-      steps: clonedImportedSteps
+      steps: clonedImportedSteps,
     };
   } else {
     addLog(`Failed to import test: ${importedTestId}`, "error");
@@ -200,7 +245,7 @@ async function executeSteps(
 
   // Use a deep clone of the steps to avoid modifying the original array
   const clonedSteps = deepClone(steps);
-  
+
   console.log(
     `Starting execution for ${testId} with name ${name} and steps:`,
     clonedSteps
@@ -208,7 +253,7 @@ async function executeSteps(
 
   for (let index = 0; index < clonedSteps.length; index++) {
     const step = clonedSteps[index]; // Access the cloned steps
-    
+
     console.log("=======================================>", page.url());
     // if (page.url().includes("google")) {
     //   // Email input
@@ -227,40 +272,38 @@ async function executeSteps(
     //     });
     //   }
     // }
-    
+
     // Update current URL and add it to step for potential fallback embedding approach
     if (page.url() !== currentUrl) {
       currentUrl = page.url();
     }
     step.currentUrl = currentUrl; // Add current URL to step for fallback embedding approach
-    
+
     // Initialize imageOnlyAttempted flag if not already set
     if (step.imageOnlyAttempted === undefined) {
       step.imageOnlyAttempted = false;
-      console.log(`Initialized imageOnlyAttempted to false for step ${step.id}`);
+      console.log(
+        `Initialized imageOnlyAttempted to false for step ${step.id}`
+      );
     }
 
     try {
       switch (step.actionType) {
         case "Click Element":
           addLog(`Clicking on element: "${step.details.element}"`, "info");
-          const clickImage = await captureAndStoreScreenshot(
-            page,
-            testId,
-            step.id,
-            runId
-          );
           if (!step.cache) {
             // Ensure current URL is set in step for potential fallback embedding approach
             step.currentUrl = page.url();
-            console.log(`Initial getSelector call - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`);
+            console.log(
+              `Initial getSelector call - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`
+            );
             // Use scroll-and-screenshot approach
             const initialClickSelector = await findSelectorByScrolling(
               page,
               step,
               name,
               tokenTracker,
-              { type: 'Click Element', description: step.details.element },
+              { type: "Click Element", description: step.details.element },
               testId,
               runId
             );
@@ -272,16 +315,7 @@ async function executeSteps(
             );
             await updateTest(testId, clonedSteps); // Update with cloned steps
           }
-          await highlightElement(
-            page,
-            step.selector)
-          const screenshotUrlBeforeClick = await captureAndStoreScreenshot(
-            page,
-            testId,
-            step.id,
-            runId
-          );
-          screenShots.push(screenshotUrlBeforeClick);
+          await highlightElement(page, step.selector);
           // Use performWithRetry for click action
           await performWithRetry(
             page,
@@ -289,9 +323,9 @@ async function executeSteps(
             3,
             step,
             name,
-            'click',
-            screenshotUrlBeforeClick,
-            '',
+            "click",
+            null, // screenshotUrlBeforeClick not needed here
+            "",
             tokenTracker,
             screenShots,
             testId,
@@ -299,35 +333,30 @@ async function executeSteps(
             runId
           );
           await page.waitForTimeout(4000);
-          const screenshotUrlAfterClick = await captureAndStoreScreenshot(
-            page,
-            testId,
-            step.id,
-            runId
+          addLog(
+            `Element "${step.details.element}" clicked successfully`,
+            "success"
           );
-          screenShots.push(screenshotUrlAfterClick);
-          addLog(`Element "${step.details.element}" clicked successfully`, "success");
           break;
 
         case "Fill Input":
-          addLog(`Filling input: "${step.details.description}" with value: "${step.details.value}"`, "info");
-          const inputImage = await captureAndStoreScreenshot(
-            page,
-            testId,
-            step.id,
-            runId
+          addLog(
+            `Filling input: "${step.details.description}" with value: "${step.details.value}"`,
+            "info"
           );
           if (!step.cache) {
             // Ensure current URL is set in step for potential fallback embedding approach
             step.currentUrl = page.url();
-            console.log(`Initial getSelector call (Fill Input) - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`);
+            console.log(
+              `Initial getSelector call (Fill Input) - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`
+            );
             // Use scroll-and-screenshot approach
             const initialFillSelector = await findSelectorByScrolling(
               page,
               step,
               name,
               tokenTracker,
-              { type: 'Fill Input', description: step.details.description },
+              { type: "Fill Input", description: step.details.description },
               testId,
               runId
             );
@@ -339,40 +368,28 @@ async function executeSteps(
             );
             await updateTest(testId, clonedSteps); // Update with cloned steps
           }
-          const screenshotUrlbeforeInput = await captureAndStoreScreenshot(
-            page,
-            testId,
-            step.id,
-            runId
-          );
-          await highlightElement(
-            page,
-            step.selector)
-          screenShots.push(screenshotUrlbeforeInput);
+          await highlightElement(page, step.selector);
           // Use performWithRetry for fill action
           await performWithRetry(
             page,
-            async (selector) => await page.locator(selector).fill(step.details.value),
+            async (selector) =>
+              await page.locator(selector).fill(step.details.value),
             3,
             step,
             name,
-            'fill',
-            screenshotUrlbeforeInput,
-            '',
+            "fill",
+            null, // screenshotUrlbeforeInput not needed here
+            "",
             tokenTracker,
             screenShots,
             testId,
             clonedSteps,
             runId
           );
-          const screenshotUrlAfterInput = await captureAndStoreScreenshot(
-            page,
-            testId,
-            step.id,
-            runId
+          addLog(
+            `Input "${step.details.description}" filled successfully`,
+            "success"
           );
-          screenShots.push(screenshotUrlAfterInput);
-          addLog(`Input "${step.details.description}" filled successfully`, "success");
           break;
 
         case "AI Visual Assertion":
@@ -387,10 +404,10 @@ async function executeSteps(
             screenshotUrl,
             step.question,
             tokenTracker,
-            { type: 'AI Visual Assertion', description: step.question }
+            { type: "AI Visual Assertion", description: step.question }
           );
           console.log(analysisResult);
-          screenShots.push(screenshotUrl);
+          pushUniqueScreenshot(screenShots, screenshotUrl);
 
           addLog(`${analysisResult}`, "info");
           break;
@@ -411,8 +428,8 @@ async function executeSteps(
             runId
           );
           addLog("Wait completed", "success");
-          screenShots.push(screenshotUrlBeforeDelay);
-          screenShots.push(screenshotUrlAfterDelay);
+          pushUniqueScreenshot(screenShots, screenshotUrlBeforeDelay);
+          pushUniqueScreenshot(screenShots, screenshotUrlAfterDelay);
           break;
 
         case "Import Reusable Test":
@@ -428,14 +445,22 @@ async function executeSteps(
               runId
             );
 
-            screenShots.push(...importResult.screenshots);
+            for (const s of importResult.screenshots) {
+              pushUniqueScreenshot(screenShots, s);
+            }
           } else {
-            addLog(`Skipping nested import of reusable test to prevent recursion`, "warning");
+            addLog(
+              `Skipping nested import of reusable test to prevent recursion`,
+              "warning"
+            );
           }
           break;
 
         case "Upload File": {
-          addLog(`Processing file upload step: ${step.details.description}`, "info");
+          addLog(
+            `Processing file upload step: ${step.details.description}`,
+            "info"
+          );
           // Screenshot before upload
           const screenshotUrlBeforeUpload = await captureAndStoreScreenshot(
             page,
@@ -443,14 +468,28 @@ async function executeSteps(
             step.id,
             runId
           );
-          screenShots.push(screenshotUrlBeforeUpload);
-          await page.act(step.details.description);
+          pushUniqueScreenshot(screenShots, screenshotUrlBeforeUpload);
+          if (!step.cache) {
+            const [actionPreview] = await page.observe(
+              step.details.description
+            );
+            await page.act(actionPreview);
+            step.selector = actionPreview;
+            step.cache = true;
+            const stepIndex = clonedSteps.findIndex((s) => s.id === step.id);
+            if (stepIndex !== -1) {
+              clonedSteps[stepIndex].cache = true;
+              clonedSteps[stepIndex].selector = actionPreview;
+              await updateTest(testId, clonedSteps);
+            }
+          } else {
+            await page.act(step.selector);
+          }
           let fileName = step.details.file_content;
           let localPath = null;
           if (fileName && typeof fileName === "string") {
             // file_content is just the file name, download from Supabase
             localPath = await downloadFileFromSupabase(fileName);
-            await page.act("click to upload");
             const fileInput = await page.locator('input[type="file"]');
             await fileInput.setInputFiles(localPath); // Ensure upload is complete
             // Screenshot after upload
@@ -460,7 +499,7 @@ async function executeSteps(
               step.id,
               runId
             );
-            screenShots.push(screenshotUrlAfterUpload);
+            pushUniqueScreenshot(screenShots, screenshotUrlAfterUpload);
             // Wait a moment to ensure file is not locked
             await page.waitForTimeout(1000);
             // Add logging before deletion
@@ -470,8 +509,14 @@ async function executeSteps(
               console.log("File deleted successfully:", localPath);
               addLog(`File deleted successfully: ${localPath}`, "success");
             } catch (err) {
-              console.error(`Failed to delete local file after upload: ${localPath}`, err);
-              addLog(`Failed to delete local file after upload: ${localPath} - ${err.message}`, "error");
+              console.error(
+                `Failed to delete local file after upload: ${localPath}`,
+                err
+              );
+              addLog(
+                `Failed to delete local file after upload: ${localPath} - ${err.message}`,
+                "error"
+              );
             }
             addLog(`File upload complete`, "success");
           } else {
@@ -485,7 +530,6 @@ async function executeSteps(
           addLog(`Unknown action type: ${step.actionType}`, "error");
           throw new Error(`Unknown action type: ${step.actionType}`);
       }
-
     } catch (error) {
       addLog(`Error in step ${index + 1}: ${error.message}`, "error");
       throw error;
@@ -499,7 +543,6 @@ async function executeSteps(
 
 // Updated getSelector function with token tracking
 
-
 // Main entry point for running a test scenario
 export default async function RunScenario(req, res) {
   let browser;
@@ -509,10 +552,10 @@ export default async function RunScenario(req, res) {
   let executionTimeout;
   let runId; // Declare runId at the top level
   let testInfo = {
-    name: 'Unknown Test',
-    testId: 'Unknown',
-    startUrl: 'Unknown',
-    email: 'Unknown'
+    name: "Unknown Test",
+    testId: "Unknown",
+    startUrl: "Unknown",
+    email: "Unknown",
   };
 
   // Define addLog function at the top level
@@ -522,19 +565,19 @@ export default async function RunScenario(req, res) {
       const logEntry = {
         message,
         status,
-        timestamp: new Date().toLocaleString('en-US', {
-          year: 'numeric',
-          month: 'short',
-          day: 'numeric',
-          hour: '2-digit',
-          minute: '2-digit',
-          second: '2-digit',
-          hour12: true
-        })
+        timestamp: new Date().toLocaleString("en-US", {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+          hour12: true,
+        }),
       };
-      
+
       logs.push(logEntry);
-      
+
       // Update logs in Supabase
       await updateStreamRun(runId, { logs: [logEntry] });
     };
@@ -542,12 +585,15 @@ export default async function RunScenario(req, res) {
 
   // Function to send error email
   const sendErrorEmail = async (error, testInfo, logs, screenShots) => {
-    const rawMessage = error?.message || 'Unknown error occurred';
+    const rawMessage = error?.message || "Unknown error occurred";
 
     // Get explanation via OpenAI
     let userFriendlyMessage = "Something went wrong during the test.";
     try {
-      userFriendlyMessage = await getUserFriendlyErrorMessage(rawMessage, tokenTracker);
+      userFriendlyMessage = await getUserFriendlyErrorMessage(
+        rawMessage,
+        tokenTracker
+      );
     } catch (openAiError) {
       console.error("OpenAI error explanation failed:", openAiError);
     }
@@ -571,15 +617,21 @@ export default async function RunScenario(req, res) {
             <p style="margin: 5px 0;"><strong>Failure Time:</strong> ${new Date().toLocaleString()}</p>
           </div>
 
-          ${screenShots && screenShots.length > 0 ? `
+          ${
+            screenShots && screenShots.length > 0
+              ? `
             <div style="margin-bottom: 20px;">
               <h2 style="color: #333; margin-bottom: 10px;">Last Screenshot Before Error</h2>
               <img src="${screenShots[screenShots.length - 1]}" alt="Last Screenshot" style="max-width: 100%; border-radius: 5px; border: 1px solid #ccc;" />
             </div>
-          ` : ''}
+          `
+              : ""
+          }
 
           <h2 style="color: #333; margin-top: 20px;">Execution Logs</h2>
-          ${logs.map(log => `
+          ${logs
+            .map(
+              (log) => `
             <div style="margin: 10px 0; padding: 10px; border-left: 4px solid ${getStatusColor(log.status)}; background-color: #f8f9fa;">
               <div style="display: flex; align-items: center;">
                 <span style="margin-right: 10px;">${getStatusIcon(log.status)}</span>
@@ -588,7 +640,9 @@ export default async function RunScenario(req, res) {
               </div>
               <p style="margin: 5px 0 0 0; color: #333;">${log.message}</p>
             </div>
-          `).join('')}
+          `
+            )
+            .join("")}
         </div>
 
         <div style="text-align: center; margin-top: 20px; color: #666; font-size: 0.9em;">
@@ -605,25 +659,28 @@ export default async function RunScenario(req, res) {
         html: errorEmailTemplate,
       });
     } catch (emailError) {
-      console.error('Failed to send error email:', emailError);
+      console.error("Failed to send error email:", emailError);
     }
   };
 
-
-
   try {
-    let { startUrl, name, steps, testId, email, runId: requestRunId } = req.body;
+    let {
+      startUrl,
+      name,
+      steps,
+      testId,
+      email,
+      runId: requestRunId,
+    } = req.body;
     runId = requestRunId; // Assign the runId from request to our top-level variable
-    
+
     // Update testInfo with actual values
     testInfo = {
-      name: name || 'Unknown Test',
-      testId: testId || 'Unknown',
-      startUrl: startUrl || 'Unknown',
-      email: email || 'Unknown'
+      name: name || "Unknown Test",
+      testId: testId || "Unknown",
+      startUrl: startUrl || "Unknown",
+      email: email || "Unknown",
     };
-
-
 
     // Initialize stream run in Supabase
     await createStreamRun(runId);
@@ -639,14 +696,14 @@ export default async function RunScenario(req, res) {
         await sendErrorEmail(error, testInfo, logs, screenShots);
         await addLog("Error: Missing required parameters", "error");
       } catch (logError) {
-        console.error('Error in error handling:', logError);
+        console.error("Error in error handling:", logError);
       }
       return res.status(404).json({
         status: "error",
         message: "Something is missing",
         logs,
         screenShots,
-        runId
+        runId,
       });
     }
 
@@ -688,6 +745,12 @@ export default async function RunScenario(req, res) {
       const tokenUsage = tokenTracker.getUsage();
       console.log(tokenUsage);
 
+      // Calculate gpt-4o cost for stagehand tokens
+      const gpt4oInputPrice = 2.5; // $2.50 per 1M input tokens
+      const stagehandTokenCount = stagehand.metrics.totalPromptTokens || 0;
+      const stagehandCost = (stagehandTokenCount / 1_000_000) * gpt4oInputPrice;
+      const totalEstimatedCost = (tokenUsage.cost || 0) + stagehandCost;
+
       // Create a more attractive email template
       const emailTemplate = `
         <div style="font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; background-color: #f9f9f9;">
@@ -707,37 +770,59 @@ export default async function RunScenario(req, res) {
             <div style="margin-bottom: 20px;">
               <h2 style="color: #333; margin-bottom: 10px;">Token Usage</h2>
               <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px;">
-                <p style="margin: 5px 0;"><strong>Total Tokens:</strong> ${tokenUsage.totalTokens}</p>
-                <p style="margin: 5px 0;"><strong>Estimated Cost:</strong> $${tokenUsage.cost}</p>
-                <p style="margin: 5px 0;"><strong>Embedding Model:</strong> ${tokenUsage.embeddingModel || 'Not Used'}</p>
-                <p style="margin: 5px 0;"><strong>Execution Model:</strong> ${tokenUsage.executionModel || 'No Model Used (All Steps Cached)'}</p>
+                <p style="margin: 5px 0;"><strong>Total Tokens:</strong> ${tokenUsage.totalTokens + (stagehandTokenCount || 0)}</p>
+                <p style="margin: 5px 0;"><strong>Estimated Cost:</strong> $${totalEstimatedCost.toFixed(4)}</p>
+                ${tokenUsage.embeddingModel ? `<p style="margin: 5px 0;"><strong>Embedding Model:</strong> ${tokenUsage.embeddingModel}</p>` : ''}
+                ${tokenUsage.executionModel ? `<p style="margin: 5px 0;"><strong>Execution Model:</strong> ${tokenUsage.executionModel}</p>` : ''}
               </div>
             </div>
 
+            ${stagehandTokenCount ? `
+            <div style="margin-bottom: 20px;">
+              <h2 style="color: #333; margin-bottom: 10px;">Stagehand Model Usage</h2>
+              <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px;">
+                <p style="margin: 5px 0;"><strong>Stagehand Tokens:</strong> ${stagehandTokenCount}</p>
+                <p style="margin: 5px 0;"><strong>Stagehand Cost:</strong> $${stagehandCost.toFixed(4)}</p>
+              </div>
+            </div>
+            ` : ''}
+
+            ${tokenUsage.stepBreakdown && tokenUsage.stepBreakdown.length > 0 ? `
             <div style="margin-bottom: 20px;">
               <h2 style="color: #333; margin-bottom: 10px;">Step-by-Step Token Usage</h2>
               <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px;">
-                ${tokenUsage.stepBreakdown.map(step => `
+                ${tokenUsage.stepBreakdown
+                  .map(
+                    (step) => `
                   <div style="margin-bottom: 10px; padding: 10px; border-left: 4px solid #2196F3; background-color: white;">
                     <p style="margin: 5px 0;"><strong>Step:</strong> ${step.step.type} - ${step.step.description}</p>
                     <p style="margin: 5px 0;"><strong>Tokens Used:</strong> ${step.tokens}</p>
                     <p style="margin: 5px 0;"><strong>Cost:</strong> $${step.cost}</p>
                     <p style="margin: 5px 0;"><strong>Model:</strong> ${step.model}</p>
                   </div>
-                `).join('')}
+                `
+                  )
+                  .join("")}
               </div>
             </div>
+            ` : ''}
 
-            ${screenShots.length > 0 ? `
+            ${
+              screenShots.length > 0
+                ? `
               <div style="margin-bottom: 20px;">
                 <h2 style="color: #333; margin-bottom: 10px;">Last Screenshot</h2>
                 <img src="${screenShots[screenShots.length - 1]}" alt="Last Screenshot" style="max-width: 100%; border-radius: 5px; border: 1px solid #ccc;" />
               </div>
-            ` : ''}
+            `
+                : ""
+            }
 
             <div>
               <h2 style="color: #333; margin-bottom: 10px;">Execution Logs</h2>
-              ${logs.map(log => `
+              ${logs
+                .map(
+                  (log) => `
                 <div style="margin: 10px 0; padding: 10px; border-left: 4px solid ${getStatusColor(log.status)}; background-color: #f8f9fa;">
                   <div style="display: flex; align-items: center;">
                     <span style="margin-right: 10px;">${getStatusIcon(log.status)}</span>
@@ -746,7 +831,9 @@ export default async function RunScenario(req, res) {
                   </div>
                   <p style="margin: 5px 0 0 0; color: #333;">${log.message}</p>
                 </div>
-              `).join('')}
+              `
+                )
+                .join("")}
             </div>
           </div>
 
@@ -760,16 +847,16 @@ export default async function RunScenario(req, res) {
         from: "support@magicslides.io",
         to: email,
         subject: `Test Execution Report: ${name}`,
-        html: emailTemplate
+        html: emailTemplate,
       });
-      console.log("=======================>",data);
-      
+      console.log("=======================>", data);
+
       // Update final state in Supabase
-      await updateStreamRun(runId, { 
+      await updateStreamRun(runId, {
         logs: logs,
-        screenshot: screenShots[screenShots.length - 1] || null
+        screenshot: screenShots[screenShots.length - 1] || null,
       });
-      
+
       return res.status(200).json({
         status: "success",
         screenShots,
@@ -777,13 +864,14 @@ export default async function RunScenario(req, res) {
         steps: executedSteps,
         runId,
         tokenUsage: {
-          totalTokens: tokenUsage.totalTokens,
+          totalTokens: tokenUsage.totalTokens + stagehandTokenCount,
+          stagehandTokens: stagehandTokenCount,
           promptTokens: tokenUsage.promptTokens,
           completionTokens: tokenUsage.completionTokens,
-          estimatedCost: tokenUsage.cost,
+          estimatedCost: totalEstimatedCost,
           embeddingModel: tokenUsage.embeddingModel,
-          executionModel: tokenUsage.executionModel
-        }
+          executionModel: tokenUsage.executionModel,
+        },
       });
     } catch (error) {
       // Capture final error screenshot
@@ -794,30 +882,33 @@ export default async function RunScenario(req, res) {
           null, // Use null for stepId to avoid DB type errors
           runId
         );
-        screenShots.push(finalErrorScreenshot);
+        pushUniqueScreenshot(screenShots, finalErrorScreenshot);
       } catch (screenshotError) {
-        console.error('Failed to capture final error screenshot:', screenshotError);
+        console.error(
+          "Failed to capture final error screenshot:",
+          screenshotError
+        );
       }
 
       try {
         await sendErrorEmail(error, testInfo, logs, screenShots);
         await addLog(`Error during test execution: ${error.message}`, "error");
-        
+
         // Update the final state in Supabase before sending response
-        await updateStreamRun(runId, { 
+        await updateStreamRun(runId, {
           logs: logs,
-          screenshot: screenShots[screenShots.length - 1] || null
+          screenshot: screenShots[screenShots.length - 1] || null,
         });
       } catch (logError) {
-        console.error('Error in error handling:', logError);
+        console.error("Error in error handling:", logError);
       }
-      
+
       return res.status(500).json({
         status: "error",
         message: `Error during test execution: ${error.message}`,
         logs,
         screenShots,
-        runId
+        runId,
       });
     } finally {
       clearTimeout(executionTimeout);
@@ -828,22 +919,22 @@ export default async function RunScenario(req, res) {
     try {
       await sendErrorEmail(error, testInfo, logs, screenShots);
       await addLog(`Fatal error in run scenario: ${error.message}`, "error");
-      
+
       // Update the final state in Supabase before sending response
-      await updateStreamRun(runId, { 
+      await updateStreamRun(runId, {
         logs: logs,
-        screenshot: screenShots[screenShots.length - 1] || null
+        screenshot: screenShots[screenShots.length - 1] || null,
       });
     } catch (logError) {
-      console.error('Error in error handling:', logError);
+      console.error("Error in error handling:", logError);
     }
-    
+
     return res.status(500).json({
       status: "error",
       message: `Something went wrong in run scenario: ${error.message}`,
       screenShots,
       logs,
-      runId
+      runId,
     });
   }
 }
@@ -871,14 +962,17 @@ async function performWithRetry(
     try {
       // Update current URL in step for potential fallback embedding approach
       step.currentUrl = page.url();
-      
+
       // Validate selector before proceeding
-      if (!step.selector || step.selector.trim() === '') {
-        console.log('Empty selector detected, fetching new selector...');
+      if (!step.selector || step.selector.trim() === "") {
+        console.log("Empty selector detected, fetching new selector...");
         const stepInfo = {
           type: step.actionType,
-          description: step.actionType === "Click Element" ? step.details.element : step.details.description,
-          attempt: attempt
+          description:
+            step.actionType === "Click Element"
+              ? step.details.element
+              : step.details.description,
+          attempt: attempt,
         };
         const selectorObject = await getSelector(
           page,
@@ -894,22 +988,23 @@ async function performWithRetry(
         step.cache = false;
       }
 
-      // Capture screenshot before action
+      // Highlight the element before performing action
+      await highlightElement(page, step.selector);
+      // Capture screenshot after highlighting (before action)
       const screenshotBeforeAction = await captureAndStoreScreenshot(
         page,
         testId,
         step.id,
         runId
       );
-      screenShots.push(screenshotBeforeAction);
-
-      // Highlight the element before performing action
-      await highlightElement(page, step.selector);
+      pushUniqueScreenshot(screenShots, screenshotBeforeAction);
 
       // Modified to handle multiple elements by selecting the visible one
       const elements = await page.locator(step.selector).all();
       if (elements.length > 1) {
-        console.log(`Found ${elements.length} matching elements, checking visibility...`);
+        console.log(
+          `Found ${elements.length} matching elements, checking visibility...`
+        );
         // Find the first visible element
         let visibleElement = null;
         for (const element of elements) {
@@ -919,26 +1014,30 @@ async function performWithRetry(
             break;
           }
         }
-        
+
         if (visibleElement) {
-          console.log('Clicking visible element');
+          console.log("Clicking visible element");
           await visibleElement.click();
         } else {
           // If no visible element found, try to make the element visible
-          console.log('No visible element found, attempting to make element visible');
+          console.log(
+            "No visible element found, attempting to make element visible"
+          );
           await page.evaluate((selector) => {
             const elements = document.querySelectorAll(selector);
             for (const element of elements) {
-              element.style.display = 'block';
-              element.style.visibility = 'visible';
-              element.style.opacity = '1';
+              element.style.display = "block";
+              element.style.visibility = "visible";
+              element.style.opacity = "1";
             }
           }, step.selector);
           // Try clicking the first element after making it visible
           await elements[0].click();
         }
       } else if (elements.length === 0) {
-        throw new Error(`No elements found matching selector: ${step.selector}`);
+        throw new Error(
+          `No elements found matching selector: ${step.selector}`
+        );
       } else {
         await action(step.selector);
       }
@@ -950,24 +1049,26 @@ async function performWithRetry(
         step.id,
         runId
       );
-      screenShots.push(screenshotAfterAction);
+      pushUniqueScreenshot(screenShots, screenshotAfterAction);
 
       // Update cache after successful action
       step.cache = true;
-      
+
       // Update the cache in the main steps array
-      const stepIndex = clonedSteps.findIndex(s => s.id === step.id);
+      const stepIndex = clonedSteps.findIndex((s) => s.id === step.id);
       if (stepIndex !== -1) {
         clonedSteps[stepIndex].cache = true;
         clonedSteps[stepIndex].selector = step.selector;
         // Preserve the imageOnlyAttempted flag
         clonedSteps[stepIndex].imageOnlyAttempted = step.imageOnlyAttempted;
-        
+
         // Update the database with the final working selector
-        console.log(`Updating database with final working selector: ${step.selector}`);
+        console.log(
+          `Updating database with final working selector: ${step.selector}`
+        );
         await updateTest(testId, clonedSteps);
       }
-      
+
       // Wait for a short time to ensure the action is complete
       await page.waitForTimeout(1000);
 
@@ -986,25 +1087,30 @@ async function performWithRetry(
           step.id,
           runId
         );
-        screenShots.push(errorScreenshot);
+        pushUniqueScreenshot(screenShots, errorScreenshot);
       } catch (screenshotError) {
-        console.error('Failed to capture error screenshot:', screenshotError);
+        console.error("Failed to capture error screenshot:", screenshotError);
       }
 
       if (attempt < retries) {
         console.log(`Retrying to fetch selector for step ${step.selector}...`);
-        console.log(`Before retry - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`);
+        console.log(
+          `Before retry - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`
+        );
         try {
           // Update current URL in step for potential fallback embedding approach
           step.currentUrl = page.url();
-          
+
           const stepInfo = {
             type: step.actionType,
-            description: step.actionType === "Click Element" ? step.details.element : step.details.description,
+            description:
+              step.actionType === "Click Element"
+                ? step.details.element
+                : step.details.description,
             attempt: attempt + 1,
-            retry: true
+            retry: true,
           };
-          
+
           const selectorObject = await getSelector(
             page,
             step,
@@ -1016,31 +1122,39 @@ async function performWithRetry(
             true // isRetryDueToFailedSelector = true
           );
           if (!selectorObject || !selectorObject.selector) {
-            throw new Error('Failed to get valid selector from getSelector');
+            throw new Error("Failed to get valid selector from getSelector");
           }
           step.selector = selectorObject.selector;
           // Reset cache when retrying with new selector
           step.cache = false;
-          
-          console.log(`After retry - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`);
-          
+
+          console.log(
+            `After retry - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`
+          );
+
           // Update the cache in the main steps array
-          const stepIndex = clonedSteps.findIndex(s => s.id === step.id);
+          const stepIndex = clonedSteps.findIndex((s) => s.id === step.id);
           if (stepIndex !== -1) {
             clonedSteps[stepIndex].cache = false;
             clonedSteps[stepIndex].selector = step.selector;
             // Preserve the imageOnlyAttempted flag
             clonedSteps[stepIndex].imageOnlyAttempted = step.imageOnlyAttempted;
-            console.log(`Updated clonedSteps[${stepIndex}].imageOnlyAttempted to: ${clonedSteps[stepIndex].imageOnlyAttempted}`);
-            
+            console.log(
+              `Updated clonedSteps[${stepIndex}].imageOnlyAttempted to: ${clonedSteps[stepIndex].imageOnlyAttempted}`
+            );
+
             // Update the database with the new selector
-            console.log(`Updating database with new selector: ${step.selector}`);
+            console.log(
+              `Updating database with new selector: ${step.selector}`
+            );
             await updateTest(testId, clonedSteps);
           }
         } catch (errormsg) {
           errmsg = errormsg;
           console.error(`Failed to re-fetch selector`, errormsg);
-          throw new Error(`Failed to get valid selector after ${attempt} attempts: ${errormsg.message}`);
+          throw new Error(
+            `Failed to get valid selector after ${attempt} attempts: ${errormsg.message}`
+          );
         }
       } else {
         // On final attempt, throw the last error with all context
@@ -1053,7 +1167,3 @@ async function performWithRetry(
 
   return step;
 }
-
-
-
-
