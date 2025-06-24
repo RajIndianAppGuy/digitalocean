@@ -7,7 +7,6 @@ import {
   userMessageToOpenAI,
   userMessageToOpenAIWithEmbedding,
 } from "./prompt.js";
-import { Stagehand } from "@browserbasehq/stagehand";
 
 import openai from "../config/openai.js"; // Assuming this is your OpenAI client instance
 
@@ -58,10 +57,9 @@ export async function getUserFriendlyErrorMessage(rawErrorText, tokenTracker = n
 // Refactor getSelectorWithStagehand to accept a page object
 async function getSelectorWithStagehand(page, url, description) {
   await page.goto(url);
-  const observations = await page.observe({
-    instruction: `Find the element ${description}`,
-  });
-  return observations[0]?.selector;
+  console.log("===================",description)
+  const [actionPreview] = await page.observe(description);
+  return actionPreview.selector
 }
 
 // Update getSelector to accept a page argument and pass it to getSelectorWithStagehand
@@ -78,7 +76,7 @@ export const getSelector = async (page, step, name, screenshotUrl, err, tokenTra
     step.imageOnlyAttempted = true;
     try {
       let currentUrl = step.currentUrl;
-      const selector = await getSelectorWithStagehand(page, currentUrl, step.details.description);
+      const selector = await getSelectorWithStagehand(page, currentUrl, step.details.element ? step.details.element : step.details.description);
       // Return in the same format as other approaches
       console.log("Stagehand selector generated:", selector);
       return { selector };
