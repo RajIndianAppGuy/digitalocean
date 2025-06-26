@@ -56,7 +56,6 @@ export async function getUserFriendlyErrorMessage(rawErrorText, tokenTracker = n
 
 // Refactor getSelectorWithStagehand to accept a page object
 async function getSelectorWithStagehand(page, url, description) {
-  await page.goto(url);
   console.log("===================",description)
   const [actionPreview] = await page.observe(description);
   return actionPreview.selector
@@ -64,184 +63,22 @@ async function getSelectorWithStagehand(page, url, description) {
 
 // Update getSelector to accept a page argument and pass it to getSelectorWithStagehand
 export const getSelector = async (page, step, name, screenshotUrl, err, tokenTracker, stepInfo = null, isRetryDueToFailedSelector = false, forceImageOnly = false) => {
-  step.imageOnlyAttempted = false;
-  const funcitonTools = CreatePlaywrightSelector();
-  const model = process.env.OPENAI_MODEL || "gpt-4o"; // Default to gpt-4o if not specified
-  
-  console.log(`getSelector called - imageOnlyAttempted: ${step.imageOnlyAttempted || false}, isRetryDueToFailedSelector: ${isRetryDueToFailedSelector}, stepInfo:`, stepInfo);
-
-  // If this is a retry due to a failed selector, skip image-only and go directly to Stagehand
-  if (isRetryDueToFailedSelector) {
-    console.log("Retry due to failed selector detected, switching to Stagehand-based approach...");
-    step.imageOnlyAttempted = true;
-    try {
-      let currentUrl = step.currentUrl;
-      const selector = await getSelectorWithStagehand(page, currentUrl, step.details.element ? step.details.element : step.details.description);
-      // Return in the same format as other approaches
-      console.log("Stagehand selector generated:", selector);
-      return { selector };
-    } catch (stagehandError) {
-      console.error("Stagehand-based approach failed, falling back to embedding-based approach...", stagehandError.message);
-      // Continue to embedding-based approach
-    }
-  }
-  
-  // If we haven't tried image-only yet, try it first
-  const hasTriedImageOnly = step.imageOnlyAttempted || false;
-  if (!hasTriedImageOnly) {
-    try {
-      console.log("Attempting image-only selector generation...");
-      let userMessage = userMessageToOpenAI(step, name);
-
-      console.log(userMessage)
-      
-      const response = await axios.post(
-        "https://api.openai.com/v1/chat/completions",
-        {
-          model: model,
-          messages: [
-            {
-              role: "user",
-              content: [
-                { type: "text", text: userMessage },
-                { type: "image_url", image_url: { url: screenshotUrl } },
-              ],
-            },
-          ],
-          functions: [funcitonTools],
-          function_call: { name: "create_playwright_selector_json" },
-          max_tokens: 300,
-        },
-        {
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${process.env.OPENAI_KEY}`,
-          },
-        }
-      );
-      
-      // Track token usage with step information
-      tokenTracker.addUsage(response, model, true, stepInfo);
-      
-      console.log(
-        "Image-only selector generated successfully:",
-        response.data.choices[0].message.function_call.arguments
-      );
-      return JSON.parse(response.data.choices[0].message.function_call.arguments);
-    } catch (error) {
-      console.log("Image-only approach failed, falling back to Stagehand-based approach...");
-      console.error("Image-only error:", error.message);
-      // Mark that we've tried image-only approach
-      step.imageOnlyAttempted = true;
-      console.log(`Set imageOnlyAttempted to true for step ${step.id}`);
-      // Continue to Stagehand-based approach
-    }
-  } else {
-    console.log("Image-only approach already attempted, using Stagehand-based approach directly...");
-  }
-  
-  // Second attempt: Stagehand-based approach
+  // Always use Stagehand-based approach only
+  let currentUrl = step.currentUrl;
   try {
-    let currentUrl = step.currentUrl;
-    const selector = await getSelectorWithStagehand(page, currentUrl, step.details.description);
+    const selector = await getSelectorWithStagehand(
+      page,
+      currentUrl,
+      step.details.element ? step.details.element : step.details.description
+    );
     // Return in the same format as other approaches
     console.log("Stagehand selector generated:", selector);
     return { selector };
   } catch (stagehandError) {
-    console.error("Stagehand-based approach failed, falling back to embedding-based approach...", stagehandError.message);
-    // Continue to embedding-based approach
-  }
-  
-  // Fallback: Use embedding-based approach
-  try {
-    // Get the current URL to generate embeddings
-    let currentUrl = step.currentUrl;
-    
-    
-    // Generate embeddings for the current page
-    const content = await getFullyRenderedContent(currentUrl);
-    const res1 = await axios.post(
-      `${process.env.DOMAIN_NAME}/embbeding`,
-      { content, url: currentUrl },
-      { maxContentLength: Infinity, maxBodyLength: Infinity }
-    );
-
-    console.log("Embedding Response:", res1.data);
-
-    // Update the main token tracker with embedding usage
-    if (res1.data.tokens) {
-      console.log("Adding embedding tokens to main tracker:", res1.data.tokens);
-      const usageResponse = {
-        data: {
-          usage: {
-            prompt_tokens: res1.data.tokens,
-            completion_tokens: 0,
-            total_tokens: res1.data.tokens
-          }
-        }
-      };
-      
-      tokenTracker.addUsage(usageResponse, "text-embedding-ada-002", false, {
-        type: "Embedding",
-        description: `Embedding for URL: ${currentUrl}`
-      });
-    }
-
-    const slug = res1.data.slug;
-    const text = step.actionType === "Click Element" 
-      ? step.details.element 
-      : step.details.description;
-    
-    const res2 = await axios.post(
-      `${process.env.DOMAIN_NAME}/findChunks`,
-      { slug, text },
-      { maxContentLength: Infinity, maxBodyLength: Infinity }
-    );
-    
-    const htmlChunks = res2.data.data;
-    
-    // Now use the embedding-based approach
-    let userMessage = userMessageToOpenAIWithEmbedding(step, htmlChunks, name);
-    
-    const response = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        model: model,
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: userMessage },
-              { type: "image_url", image_url: { url: screenshotUrl } },
-            ],
-          },
-        ],
-        functions: [funcitonTools],
-        function_call: { name: "create_playwright_selector_json" },
-        max_tokens: 300,
-      },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.OPENAI_KEY}`,
-        },
-      }
-    );
-    
-    // Track token usage with step information
-    tokenTracker.addUsage(response, model, true, stepInfo);
-    
-    console.log(
-      "Embedding-based selector generated:",
-      response.data.choices[0].message.function_call.arguments
-    );
-    return JSON.parse(response.data.choices[0].message.function_call.arguments);
-  } catch (embeddingError) {
-    console.error("Embedding-based approach also failed:", embeddingError.message);
-    throw new Error(`Both image-only and embedding-based approaches failed. Last error: ${embeddingError.message}`);
+    console.error("Stagehand-based approach failed:", stagehandError.message);
+    throw new Error(`Stagehand-based approach failed: ${stagehandError.message}`);
   }
 };
-
 
 export const getExtensionSelector = async (element, tokenTracker, stepInfo = null) => {
   let userMessage = extensionMessageToOpenAI(element);
