@@ -115,7 +115,7 @@ async function captureAndStoreScreenshot(
   }
 }
 
-// Helper: Scroll and try image-only selector generation at each scroll position
+// Helper: Always use Stagehand for selector generation, skip image/scrolling
 async function findSelectorByScrolling(
   page,
   step,
@@ -125,54 +125,12 @@ async function findSelectorByScrolling(
   testId,
   runId
 ) {
-  const scrollStep = 500; // px
-  let lastScrollTop = -1;
-  let scrollAttempts = 0;
-  const maxScrolls = 20; // Prevent infinite loops
-
-  while (scrollAttempts < maxScrolls) {
-    // Take screenshot at current scroll position
-    const screenshotUrl = await captureAndStoreScreenshot(
-      page,
-      testId,
-      step.id,
-      runId,
-      false
-    );
-    // Try image-only selector
-    try {
-      const result = await getSelector(
-        page,
-        step,
-        name,
-        screenshotUrl,
-        "",
-        tokenTracker,
-        stepInfo,
-        false // isRetryDueToFailedSelector
-      );
-      if (result && result.selector) {
-        return result; // Found!
-      }
-    } catch (e) {
-      // If fails, continue
-    }
-    // Scroll down
-    const scrollTop = await page.evaluate((scrollStep) => {
-      window.scrollBy(0, scrollStep);
-      return window.scrollY;
-    }, scrollStep);
-    // If we can't scroll further, break
-    if (scrollTop === lastScrollTop) break;
-    lastScrollTop = scrollTop;
-    scrollAttempts++;
-  }
-  // Fallback to Stagehand/embedding
+  // Directly use Stagehand-based selector generation
   return await getSelector(
     page,
     step,
     name,
-    null, // No screenshot for fallback
+    null, // No screenshot
     "",
     tokenTracker,
     stepInfo,
@@ -602,6 +560,7 @@ export default async function RunScenario(req, res) {
       testId,
       email,
       runId: requestRunId,
+      cloudfare
     } = req.body;
     runId = requestRunId; // Assign the runId from request to our top-level variable
 
@@ -638,12 +597,39 @@ export default async function RunScenario(req, res) {
     }
 
     console.log("Starting browser...........");
-    const stagehand = new Stagehand({
-      env: "LOCAL",
-      modelName: "gpt-4o",
-      localBrowserLaunchOptions: { headless: true },
-      modelClientOptions: { apiKey: process.env.OPENAI_KEY },
-    });
+    let stagehand
+
+    if(cloudfare){
+       stagehand = new Stagehand({
+        env: "BROWSERBASE",
+        apiKey: process.env.BROWSERBASE_API_KEY,
+        projectId: process.env.BROWSERBASE_PROJECT_ID,
+        browserbaseSessionCreateParams: {
+          projectId: process.env.BROWSERBASE_PROJECT_ID,
+          browserSettings: {
+            solveCaptchas: true, // This is enabled by default
+            blockAds: true, // Helps avoid ad-related CAPTCHAs
+            // advancedStealth: true, // Only available on Scale Plans - helps bypass detection
+          },
+        },
+        modelName: "gpt-4o",
+        localBrowserLaunchOptions: { headless: true },
+        modelClientOptions: { apiKey: process.env.OPENAI_KEY },
+      });
+    }else{
+
+       stagehand = new Stagehand({
+        env: "LOCAL",
+        modelName: "gpt-4o",
+        localBrowserLaunchOptions: { headless: true },
+        modelClientOptions: { apiKey: process.env.OPENAI_KEY },
+      });
+
+    }
+
+
+
+
     await stagehand.init();
     const page = stagehand.page;
 
