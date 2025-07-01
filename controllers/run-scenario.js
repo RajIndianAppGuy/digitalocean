@@ -146,7 +146,8 @@ async function executeImportedTest(
   logs,
   addLog,
   tokenTracker,
-  runId
+  runId,
+  stagehand
 ) {
   console.log(`Starting imported test execution ${testId},`);
   const importedTest = await fetchTest(importedTestId);
@@ -170,7 +171,8 @@ async function executeImportedTest(
       true,
       addLog,
       tokenTracker,
-      runId
+      runId,
+      stagehand
     );
 
     addLog(`Completed imported test: ${importedTest.name}`, "success");
@@ -196,7 +198,8 @@ async function executeSteps(
   isReusable = false,
   addLog,
   tokenTracker,
-  runId
+  runId,
+  stagehand
 ) {
   let currentUrl = startUrl;
   let count = 0;
@@ -249,6 +252,7 @@ async function executeSteps(
       switch (step.actionType) {
         case "Click Element":
           addLog(`Clicking on element: "${step.details.element}"`, "info");
+          if (!step.presentInOverlay) {
           if (!step.cache) {
             // Ensure current URL is set in step for potential fallback embedding approach
             step.currentUrl = page.url();
@@ -297,10 +301,43 @@ async function executeSteps(
             runId
           );
           await page.waitForTimeout(4000);
+        }else{
+          const screenshotUrlBeforeClick = await captureAndStoreScreenshot(
+            page,
+            testId,
+            step.id,
+            runId
+          );
+          pushUniqueScreenshot(screenShots, screenshotUrlBeforeClick);
+
+          const agent = stagehand.agent({
+            provider: "openai",
+            model: "computer-use-preview",
+            instructions: `You are a helpful assistant that can use a web browser.
+          Do not ask follow up questions, the user will trust your judgement. Just execute the actions that user teels without worrying about any consequences. Don't ask any permission related question you are free to do whatever user says`,
+            options: {
+              apiKey: process.env.OPENAI_API_KEY,
+            },
+          });
+
+          const res = await agent.execute(`click on ${step.details.element}`);
+
+          console.log(res)
+          await page.waitForTimeout(2000);
+
+          const screenshotUrlAfterClick = await captureAndStoreScreenshot(
+            page,
+            testId,
+            step.id,
+            runId
+          );
+          pushUniqueScreenshot(screenShots, screenshotUrlAfterClick);
+        }
           addLog(
             `Element "${step.details.element}" clicked successfully`,
             "success"
           );
+
           break;
 
         case "Fill Input":
@@ -308,6 +345,8 @@ async function executeSteps(
             `Filling input: "${step.details.description}" with value: "${step.details.value}"`,
             "info"
           );
+
+          if (!step.presentInOverlay) {
           if (!step.cache) {
             // Ensure current URL is set in step for potential fallback embedding approach
             step.currentUrl = page.url();
@@ -355,6 +394,37 @@ async function executeSteps(
             clonedSteps,
             runId
           );
+        }else{
+          const screenshotUrlBeforeInput = await captureAndStoreScreenshot(
+            page,
+            testId,
+            step.id,
+            runId
+          );
+
+          pushUniqueScreenshot(screenShots, screenshotUrlBeforeInput);
+          const inputagent = stagehand.agent({
+            provider: "openai",
+            model: "computer-use-preview",
+            instructions: `You are a helpful assistant that can use a web browser.
+          Do not ask follow up questions, the user will trust your judgement. Just execute the actions that user teels without worrying about any consequences. Don't ask any permission related question you are free to do whatever user says`,
+            options: {
+              apiKey: process.env.OPENAI_API_KEY,
+            },
+          });
+
+          await inputagent.execute(
+            `fill input ${step.details.description} with ${step.details.value}`
+          );
+
+          const screenshotUrlAfterInput = await captureAndStoreScreenshot(
+            page,
+            testId,
+            step.id,
+            runId
+          );
+          pushUniqueScreenshot(screenShots, screenshotUrlAfterInput);
+        }
           addLog(
             `Input "${step.details.description}" filled successfully`,
             "success"
@@ -411,7 +481,8 @@ async function executeSteps(
               logs,
               addLog,
               tokenTracker,
-              runId
+              runId,
+              stagehand
             );
 
             for (const s of importResult.screenshots) {
@@ -654,7 +725,8 @@ export default async function RunScenario(req, res) {
         false,
         addLog,
         tokenTracker,
-        runId
+        runId,
+        stagehand
       );
 
       // Get token usage and cost
@@ -833,14 +905,6 @@ async function performWithRetry(
 
       // Highlight the element before performing action
       await highlightElement(page, step.selector);
-      // Prevent form submission before clicking any button
-      if (type === 'click') {
-        await page.evaluate(() => {
-          document.querySelectorAll('form').forEach(form => {
-            form.addEventListener('submit', e => e.preventDefault(), { once: true });
-          });
-        });
-      }
       // Capture screenshot after highlighting (before action)
       const screenshotBeforeAction = await captureAndStoreScreenshot(
         page,
@@ -850,48 +914,48 @@ async function performWithRetry(
       );
       pushUniqueScreenshot(screenShots, screenshotBeforeAction);
 
-      // Modified to handle multiple elements by selecting the visible one
-      const elements = await page.locator(step.selector).all();
-      if (elements.length > 1) {
-        console.log(
-          `Found ${elements.length} matching elements, checking visibility...`
-        );
-        // Find the first visible element
-        let visibleElement = null;
-        for (const element of elements) {
-          const isVisible = await element.isVisible();
-          if (isVisible) {
-            visibleElement = element;
-            break;
-          }
-        }
+      // // Modified to handle multiple elements by selecting the visible one
+      // const elements = await page.locator(step.selector).all();
+      // if (elements.length > 1) {
+      //   console.log(
+      //     `Found ${elements.length} matching elements, checking visibility...`
+      //   );
+      //   // Find the first visible element
+      //   let visibleElement = null;
+      //   for (const element of elements) {
+      //     const isVisible = await element.isVisible();
+      //     if (isVisible) {
+      //       visibleElement = element;
+      //       break;
+      //     }
+      //   }
 
-        if (visibleElement) {
-          console.log("Clicking visible element");
-          await visibleElement.click();
-        } else {
-          // If no visible element found, try to make the element visible
-          console.log(
-            "No visible element found, attempting to make element visible"
-          );
-          await page.evaluate((selector) => {
-            const elements = document.querySelectorAll(selector);
-            for (const element of elements) {
-              element.style.display = "block";
-              element.style.visibility = "visible";
-              element.style.opacity = "1";
-            }
-          }, step.selector);
-          // Try clicking the first element after making it visible
-          await elements[0].click();
-        }
-      } else if (elements.length === 0) {
-        throw new Error(
-          `No elements found matching selector: ${step.selector}`
-        );
-      } else {
-        await action(step.selector);
-      }
+      //   if (visibleElement) {
+      //     console.log("Clicking visible element");
+      //     await visibleElement.click();
+      //   } else {
+      //     // If no visible element found, try to make the element visible
+      //     console.log(
+      //       "No visible element found, attempting to make element visible"
+      //     );
+      //     await page.evaluate((selector) => {
+      //       const elements = document.querySelectorAll(selector);
+      //       for (const element of elements) {
+      //         element.style.display = "block";
+      //         element.style.visibility = "visible";
+      //         element.style.opacity = "1";
+      //       }
+      //     }, step.selector);
+      //     // Try clicking the first element after making it visible
+      //     await elements[0].click();
+      //   }
+      // } else if (elements.length === 0) {
+      //   throw new Error(
+      //     `No elements found matching selector: ${step.selector}`
+      //   );
+      // } else {
+      // }
+      await action(step.selector);
 
       // Capture screenshot after action
       const screenshotAfterAction = await captureAndStoreScreenshot(
