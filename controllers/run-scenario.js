@@ -123,7 +123,8 @@ async function findSelectorByScrolling(
   tokenTracker,
   stepInfo,
   testId,
-  runId
+  runId,
+  stagehand
 ) {
   // Directly use Stagehand-based selector generation
   return await getSelector(
@@ -134,7 +135,9 @@ async function findSelectorByScrolling(
     "",
     tokenTracker,
     stepInfo,
-    true // isRetryDueToFailedSelector = true (triggers Stagehand/embedding)
+    true, // isRetryDueToFailedSelector = true (triggers Stagehand/embedding)
+    false, // forceImageOnly
+    stagehand // pass stagehand
   );
 }
 
@@ -253,86 +256,90 @@ async function executeSteps(
         case "Click Element":
           addLog(`Clicking on element: "${step.details.element}"`, "info");
           if (!step.presentInOverlay) {
-          if (!step.cache) {
-            // Ensure current URL is set in step for potential fallback embedding approach
-            step.currentUrl = page.url();
-            console.log(
-              `Initial getSelector call - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`
-            );
-            // Use scroll-and-screenshot approach
-            const initialClickSelector = await findSelectorByScrolling(
+            if (!step.cache) {
+              // Ensure current URL is set in step for potential fallback embedding approach
+              step.currentUrl = page.url();
+              console.log(
+                `Initial getSelector call - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`
+              );
+              // Use scroll-and-screenshot approach
+              const initialClickSelector = await findSelectorByScrolling(
+                page,
+                step,
+                name,
+                tokenTracker,
+                { type: "Click Element", description: step.details.element },
+                testId,
+                runId,
+                stagehand
+              );
+              step.selector = initialClickSelector.selector;
+              // Update the cloned steps and avoid mutating the original steps array
+              console.log(
+                `Updating testid ${testId} with cloned steps:`,
+                clonedSteps
+              );
+              await updateTest(testId, clonedSteps); // Update with cloned steps
+            }
+            await highlightElement(page, step.selector);
+            // Prevent form submission before clicking any button
+            await page.evaluate(() => {
+              document.querySelectorAll("form").forEach((form) => {
+                form.addEventListener("submit", (e) => e.preventDefault(), {
+                  once: true,
+                });
+              });
+            });
+            // Use performWithRetry for click action
+            await performWithRetry(
               page,
+              async (selector) => await page.locator(selector).click(),
+              3,
               step,
               name,
+              "click",
+              null, // screenshotUrlBeforeClick not needed here
+              "",
               tokenTracker,
-              { type: "Click Element", description: step.details.element },
+              screenShots,
               testId,
+              clonedSteps,
+              runId,
+              stagehand
+            );
+            await page.waitForTimeout(4000);
+          } else {
+            const screenshotUrlBeforeClick = await captureAndStoreScreenshot(
+              page,
+              testId,
+              step.id,
               runId
             );
-            step.selector = initialClickSelector.selector;
-            // Update the cloned steps and avoid mutating the original steps array
-            console.log(
-              `Updating testid ${testId} with cloned steps:`,
-              clonedSteps
-            );
-            await updateTest(testId, clonedSteps); // Update with cloned steps
-          }
-          await highlightElement(page, step.selector);
-          // Prevent form submission before clicking any button
-          await page.evaluate(() => {
-            document.querySelectorAll('form').forEach(form => {
-              form.addEventListener('submit', e => e.preventDefault(), { once: true });
-            });
-          });
-          // Use performWithRetry for click action
-          await performWithRetry(
-            page,
-            async (selector) => await page.locator(selector).click(),
-            3,
-            step,
-            name,
-            "click",
-            null, // screenshotUrlBeforeClick not needed here
-            "",
-            tokenTracker,
-            screenShots,
-            testId,
-            clonedSteps,
-            runId
-          );
-          await page.waitForTimeout(4000);
-        }else{
-          const screenshotUrlBeforeClick = await captureAndStoreScreenshot(
-            page,
-            testId,
-            step.id,
-            runId
-          );
-          pushUniqueScreenshot(screenShots, screenshotUrlBeforeClick);
+            pushUniqueScreenshot(screenShots, screenshotUrlBeforeClick);
 
-          const agent = stagehand.agent({
-            provider: "openai",
-            model: "computer-use-preview",
-            instructions: `You are a helpful assistant that can use a web browser.
+            const agent = stagehand.agent({
+              provider: "openai",
+              model: "computer-use-preview",
+              instructions: `You are a helpful assistant that can use a web browser.
           Do not ask follow up questions, the user will trust your judgement. Just execute the actions that user teels without worrying about any consequences. Don't ask any permission related question you are free to do whatever user says`,
-            options: {
-              apiKey: process.env.OPENAI_API_KEY,
-            },
-          });
+              options: {
+                apiKey: process.env.OPENAI_API_KEY,
+              },
+            });
 
-          const res = await agent.execute(`click on ${step.details.element}`);
+            const res = await agent.execute(`click on ${step.details.element}`);
 
-          console.log(res)
-          await page.waitForTimeout(2000);
+            console.log(res);
+            await page.waitForTimeout(2000);
 
-          const screenshotUrlAfterClick = await captureAndStoreScreenshot(
-            page,
-            testId,
-            step.id,
-            runId
-          );
-          pushUniqueScreenshot(screenShots, screenshotUrlAfterClick);
-        }
+            const screenshotUrlAfterClick = await captureAndStoreScreenshot(
+              page,
+              testId,
+              step.id,
+              runId
+            );
+            pushUniqueScreenshot(screenShots, screenshotUrlAfterClick);
+          }
           addLog(
             `Element "${step.details.element}" clicked successfully`,
             "success"
@@ -347,84 +354,88 @@ async function executeSteps(
           );
 
           if (!step.presentInOverlay) {
-          if (!step.cache) {
-            // Ensure current URL is set in step for potential fallback embedding approach
-            step.currentUrl = page.url();
-            console.log(
-              `Initial getSelector call (Fill Input) - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`
-            );
-            // Use scroll-and-screenshot approach
-            const initialFillSelector = await findSelectorByScrolling(
+            if (!step.cache) {
+              // Ensure current URL is set in step for potential fallback embedding approach
+              step.currentUrl = page.url();
+              console.log(
+                `Initial getSelector call (Fill Input) - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`
+              );
+              // Use scroll-and-screenshot approach
+              const initialFillSelector = await findSelectorByScrolling(
+                page,
+                step,
+                name,
+                tokenTracker,
+                { type: "Fill Input", description: step.details.description },
+                testId,
+                runId,
+                stagehand
+              );
+              step.selector = initialFillSelector.selector;
+              // Update the cloned steps
+              console.log(
+                `Updating testid ${testId} with cloned steps:`,
+                clonedSteps
+              );
+              await updateTest(testId, clonedSteps); // Update with cloned steps
+            }
+            await highlightElement(page, step.selector);
+            // Use performWithRetry for fill action
+            await performWithRetry(
               page,
+              async (selector) => {
+                await page.locator(selector).fill(step.details.value);
+                await page.waitForTimeout(500); // Add delay after fill
+                // Log all input values after fill
+                const allInputs = await page.$$eval("input", (inputs) =>
+                  inputs.map((i) => i.value)
+                );
+                console.log("All input values after fill:", allInputs);
+              },
+              3,
               step,
               name,
+              "fill",
+              null, // screenshotUrlbeforeInput not needed here
+              "",
               tokenTracker,
-              { type: "Fill Input", description: step.details.description },
+              screenShots,
               testId,
+              clonedSteps,
+              runId,
+              stagehand
+            );
+          } else {
+            const screenshotUrlBeforeInput = await captureAndStoreScreenshot(
+              page,
+              testId,
+              step.id,
               runId
             );
-            step.selector = initialFillSelector.selector;
-            // Update the cloned steps
-            console.log(
-              `Updating testid ${testId} with cloned steps:`,
-              clonedSteps
-            );
-            await updateTest(testId, clonedSteps); // Update with cloned steps
-          }
-          await highlightElement(page, step.selector);
-          // Use performWithRetry for fill action
-          await performWithRetry(
-            page,
-            async (selector) => {
-              await page.locator(selector).fill(step.details.value);
-              await page.waitForTimeout(500); // Add delay after fill
-              // Log all input values after fill
-              const allInputs = await page.$$eval('input', inputs => inputs.map(i => i.value));
-              console.log('All input values after fill:', allInputs);
-            },
-            3,
-            step,
-            name,
-            "fill",
-            null, // screenshotUrlbeforeInput not needed here
-            "",
-            tokenTracker,
-            screenShots,
-            testId,
-            clonedSteps,
-            runId
-          );
-        }else{
-          const screenshotUrlBeforeInput = await captureAndStoreScreenshot(
-            page,
-            testId,
-            step.id,
-            runId
-          );
 
-          pushUniqueScreenshot(screenShots, screenshotUrlBeforeInput);
-          const inputagent = stagehand.agent({
-            provider: "openai",
-            model: "computer-use-preview",
-            instructions: `You are a helpful assistant that can use a web browser.
+            pushUniqueScreenshot(screenShots, screenshotUrlBeforeInput);
+            const inputagent = stagehand.agent({
+              provider: "openai",
+              model: "computer-use-preview",
+              instructions: `You are a helpful assistant that can use a web browser.
           Do not ask follow up questions, the user will trust your judgement. Just execute the actions that user teels without worrying about any consequences. Don't ask any permission related question you are free to do whatever user says`,
-            options: {
-              apiKey: process.env.OPENAI_API_KEY,
-            },
-          });
+              options: {
+                apiKey: process.env.OPENAI_API_KEY,
+              },
+            });
 
-          await inputagent.execute(
-            `fill input ${step.details.description} with ${step.details.value}`
-          );
+            await inputagent.execute(
+              `fill input ${step.details.description} with ${step.details.value}`
+            );
 
-          const screenshotUrlAfterInput = await captureAndStoreScreenshot(
-            page,
-            testId,
-            step.id,
-            runId
-          );
-          pushUniqueScreenshot(screenShots, screenshotUrlAfterInput);
-        }
+            const screenshotUrlAfterInput = await captureAndStoreScreenshot(
+              page,
+              testId,
+              step.id,
+              runId
+            );
+            pushUniqueScreenshot(screenShots, screenshotUrlAfterInput);
+          }
           addLog(
             `Input "${step.details.description}" filled successfully`,
             "success"
@@ -443,7 +454,8 @@ async function executeSteps(
             screenshotUrl,
             step.question,
             tokenTracker,
-            { type: "AI Visual Assertion", description: step.question }
+            { type: "AI Visual Assertion", description: step.question },
+            stagehand
           );
           console.log(analysisResult);
           pushUniqueScreenshot(screenShots, screenshotUrl);
@@ -486,7 +498,7 @@ async function executeSteps(
             );
 
             for (const s of importResult.screenshots) {
-              pushUniqueScreenshot(screenShots, s); 
+              pushUniqueScreenshot(screenShots, s);
             }
           } else {
             addLog(
@@ -515,7 +527,7 @@ async function executeSteps(
             );
             await page.act(actionPreview);
             step.selector = actionPreview;
-            step.cache = true;
+            // step.cache = true;
             const stepIndex = clonedSteps.findIndex((s) => s.id === step.id);
             if (stepIndex !== -1) {
               clonedSteps[stepIndex].cache = true;
@@ -631,7 +643,7 @@ export default async function RunScenario(req, res) {
       testId,
       email,
       runId: requestRunId,
-      cloudfare
+      cloudfare,
     } = req.body;
     runId = requestRunId; // Assign the runId from request to our top-level variable
 
@@ -668,10 +680,10 @@ export default async function RunScenario(req, res) {
     }
 
     console.log("Starting browser...........");
-    let stagehand
+    let stagehand;
 
-    if(cloudfare){
-       stagehand = new Stagehand({
+    if (cloudfare) {
+      stagehand = new Stagehand({
         env: "BROWSERBASE",
         apiKey: process.env.BROWSERBASE_API_KEY,
         projectId: process.env.BROWSERBASE_PROJECT_ID,
@@ -680,6 +692,10 @@ export default async function RunScenario(req, res) {
           browserSettings: {
             solveCaptchas: true, // This is enabled by default
             blockAds: true, // Helps avoid ad-related CAPTCHAs
+            viewport: {
+              width: 1024,
+              height: 768,
+            },
             // advancedStealth: true, // Only available on Scale Plans - helps bypass detection
           },
         },
@@ -687,19 +703,20 @@ export default async function RunScenario(req, res) {
         localBrowserLaunchOptions: { headless: true },
         modelClientOptions: { apiKey: process.env.OPENAI_KEY },
       });
-    }else{
-
-       stagehand = new Stagehand({
+    } else {
+      stagehand = new Stagehand({
         env: "LOCAL",
         modelName: "gpt-4o",
-        localBrowserLaunchOptions: { headless: true },
+        localBrowserLaunchOptions: {
+          headless: true,
+          viewport: {
+            width: 1024,
+            height: 768,
+          },
+        },
         modelClientOptions: { apiKey: process.env.OPENAI_KEY },
       });
-
     }
-
-
-
 
     await stagehand.init();
     const page = stagehand.page;
@@ -740,12 +757,21 @@ export default async function RunScenario(req, res) {
       const totalEstimatedCost = (tokenUsage.cost || 0) + stagehandCost;
 
       // Send success email
-      const runDate = new Date().toLocaleDateString("en-US", { year: "numeric", month: "2-digit", day: "2-digit" });
-      const runTime = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      const runDate = new Date().toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      });
+      const runTime = new Date().toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
       const runDateTime = `${runDate} ${runTime}`;
       const testRunUrl = `https://www.browsingbee.com/test-run/${runId}`;
-      const lastScreenshot = screenShots.length > 0 ? screenShots[screenShots.length - 1] : null;
-      let emailTemplate = `Hello,<br><br>` +
+      const lastScreenshot =
+        screenShots.length > 0 ? screenShots[screenShots.length - 1] : null;
+      let emailTemplate =
+        `Hello,<br><br>` +
         `Test run successfully; costed $${totalEstimatedCost.toFixed(2)} ran at ${runDateTime} <br><br>` +
         `see details <a href=\"${testRunUrl}\">${testRunUrl}</a> <br><br>`;
       if (lastScreenshot) {
@@ -795,12 +821,21 @@ export default async function RunScenario(req, res) {
         // ignore screenshot error
       }
       // Send failure email (no OpenAI, no error details)
-      const runDate = new Date().toLocaleDateString("en-US", { year: "numeric", month: "2-digit", day: "2-digit" });
-      const runTime = new Date().toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+      const runDate = new Date().toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      });
+      const runTime = new Date().toLocaleTimeString("en-US", {
+        hour: "2-digit",
+        minute: "2-digit",
+      });
       const runDateTime = `${runDate} ${runTime}`;
       const testRunUrl = `https://www.browsingbee.com/test-run/${runId}`;
-      const lastScreenshot = screenShots.length > 0 ? screenShots[screenShots.length - 1] : null;
-      let emailTemplate = `Hello,<br><br>` +
+      const lastScreenshot =
+        screenShots.length > 0 ? screenShots[screenShots.length - 1] : null;
+      let emailTemplate =
+        `Hello,<br><br>` +
         `Test run failed; ran at ${runDateTime} <br><br>` +
         `see details <a href=\"${testRunUrl}\">${testRunUrl}</a> <br><br>`;
       if (lastScreenshot) {
@@ -868,7 +903,8 @@ async function performWithRetry(
   screenShots,
   testId,
   clonedSteps,
-  runId
+  runId,
+  stagehand
 ) {
   let errmsg = "";
   let lastError = null;
@@ -878,8 +914,13 @@ async function performWithRetry(
       // Update current URL in step for potential fallback embedding approach
       step.currentUrl = page.url();
 
+      // Always clear selector on retry (except first attempt)
+      if (attempt > 1) {
+        step.selector = undefined;
+      }
+
       // Validate selector before proceeding
-      if (!step.selector || step.selector.trim() === "") {
+      if (!step.selector) {
         console.log("Empty selector detected, fetching new selector...");
         const stepInfo = {
           type: step.actionType,
@@ -897,7 +938,9 @@ async function performWithRetry(
           errmsg,
           tokenTracker,
           stepInfo,
-          true // isRetryDueToFailedSelector = true
+          true, // isRetryDueToFailedSelector = true
+          false, // forceImageOnly
+          stagehand
         );
         step.selector = selectorObject.selector;
         step.cache = false;
@@ -955,7 +998,9 @@ async function performWithRetry(
       //   );
       // } else {
       // }
-      await action(step.selector);
+      if (typeof step.selector === "string") {
+        await action(step.selector);
+      }
 
       // Capture screenshot after action
       const screenshotAfterAction = await captureAndStoreScreenshot(
@@ -967,7 +1012,7 @@ async function performWithRetry(
       pushUniqueScreenshot(screenShots, screenshotAfterAction);
 
       // Update cache after successful action
-      step.cache = true;
+      // step.cache = true;
 
       // Update the cache in the main steps array
       const stepIndex = clonedSteps.findIndex((s) => s.id === step.id);
@@ -1034,7 +1079,9 @@ async function performWithRetry(
             errmsg,
             tokenTracker,
             stepInfo,
-            true // isRetryDueToFailedSelector = true
+            true, // isRetryDueToFailedSelector = true
+            false, // forceImageOnly
+            stagehand
           );
           if (!selectorObject || !selectorObject.selector) {
             throw new Error("Failed to get valid selector from getSelector");
@@ -1042,10 +1089,6 @@ async function performWithRetry(
           step.selector = selectorObject.selector;
           // Reset cache when retrying with new selector
           step.cache = false;
-
-          console.log(
-            `After retry - step.imageOnlyAttempted: ${step.imageOnlyAttempted}`
-          );
 
           // Update the cache in the main steps array
           const stepIndex = clonedSteps.findIndex((s) => s.id === step.id);
