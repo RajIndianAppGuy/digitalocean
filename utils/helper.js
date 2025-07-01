@@ -7,6 +7,7 @@ import {
   userMessageToOpenAI,
   userMessageToOpenAIWithEmbedding,
 } from "./prompt.js";
+import { Stagehand } from "@browserbasehq/stagehand";
 
 import openai from "../config/openai.js"; // Assuming this is your OpenAI client instance
 
@@ -56,27 +57,59 @@ export async function getUserFriendlyErrorMessage(rawErrorText, tokenTracker = n
 
 // Refactor getSelectorWithStagehand to accept a page object
 async function getSelectorWithStagehand(page, url, description) {
-  console.log("===================",description)
-  const [actionPreview] = await page.observe(description);
-  return actionPreview.selector
+  console.log("===================", description);
+  const observed = await page.observe(description);
+  console.log("Observed result:", observed);
+  const [actionPreview] = observed || [];
+  if (!actionPreview) {
+    throw new Error(
+      `Could not locate the element on the screen for description: "${description}". Please provide a more detailed or accurate description, or recheck the element details.`
+    );
+  }
+  return actionPreview.selector;
 }
 
 // Update getSelector to accept a page argument and pass it to getSelectorWithStagehand
-export const getSelector = async (page, step, name, screenshotUrl, err, tokenTracker, stepInfo = null, isRetryDueToFailedSelector = false, forceImageOnly = false) => {
-  // Always use Stagehand-based approach only
+export const getSelector = async (page, step, name, screenshotUrl, err, tokenTracker, stepInfo = null, isRetryDueToFailedSelector = false, forceImageOnly = false, stagehand = null) => {
   let currentUrl = step.currentUrl;
   try {
     const selector = await getSelectorWithStagehand(
       page,
       currentUrl,
-      step.details.element ? step.details.element : step.details.description
+      step.details.element ? `${step.details.element} button` : step.details.description
     );
-    // Return in the same format as other approaches
     console.log("Stagehand selector generated:", selector);
     return { selector };
   } catch (stagehandError) {
     console.error("Stagehand-based approach failed:", stagehandError.message);
-    throw new Error(`Stagehand-based approach failed: ${stagehandError.message}`);
+    // AGENTIC FALLBACK
+    if (!stagehand) throw new Error("Agentic fallback requires a stagehand instance");
+    try {
+      console.log("Falling back to agentic approach...");
+      let result;
+      const agent = stagehand.agent({
+        provider: "openai",
+        model: "computer-use-preview",
+        instructions: `You are a helpful assistant that can use a web browser. Do not ask follow up questions, the user will trust your judgement. Just execute the actions that user tells without worrying about any consequences. Don't ask any permission related question you are free to do whatever user says`,
+        options: {
+          apiKey: process.env.OPENAI_API_KEY,
+        },
+      });
+      if (step.actionType === "Click Element") {
+        result = await agent.execute(`click on ${step.details.element}`);
+      } else if (step.actionType === "Fill Input") {
+        console.log(`fill input ${step.details.description} with ${step.details.value}`)
+        result = await agent.execute(`fill input ${step.details.description} with ${step.details.value}`);
+      } else {
+        throw new Error("Agentic fallback only supports Click Element and Fill Input");
+      }
+      // Return the agentic actions as the selector
+      console.log("result", result.actions)
+      return { selector: "" };
+    } catch (agenticError) {
+      console.error("Agentic approach also failed:", agenticError.message);
+      throw new Error(`Both Stagehand and agentic approaches failed: ${agenticError.message}`);
+    }
   }
 };
 
