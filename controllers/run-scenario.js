@@ -468,6 +468,7 @@ async function executeSteps(
 
             pushUniqueScreenshot(screenShots, screenshotUrlBeforeInput);
 
+            if(!step.cache){
               const inputagent = stagehand.agent({
                 provider: "openai",
                 model: "computer-use-preview",
@@ -484,6 +485,14 @@ async function executeSteps(
                 `fill input ${step.details.description} with ${step.details.value}`
               );
 
+              const actions = inputres.actions
+
+              await page.keyboard.press('Control+A');
+              await page.keyboard.press('Backspace');
+
+              await page.mouse.click(actions[1].x,actions[1].y)
+              await page.keyboard.type(step.details.value)
+
               const screenshotUrlAfterInput = await captureAndStoreScreenshot(
                 page,
                 testId,
@@ -495,9 +504,16 @@ async function executeSteps(
               tokenTracker.addUsage(null,"gpt-4o",false,step,inputusage)
 
               step.selector = inputres.actions;
+              step.cache = true
               await updateTest(testId, clonedSteps);
             
+          }else{
+            const cachedinp = step.selector
+            
+            await page.mouse.click(cachedinp[1].x,cachedinp[1].y)
+            await page.keyboard.type(step.details.value);
           }
+        }
           addLog(
             `Input "${step.details.description}" filled successfully`,
             "success"
