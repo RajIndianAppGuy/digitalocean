@@ -1,6 +1,7 @@
 import axios from "axios";
 import { Stagehand } from "@browserbasehq/stagehand";
 import { analyzeScreenshot } from "../config/vision-api.js";
+import { Browserbase } from "@browserbasehq/sdk";
 import {
   getSelector,
   getUserFriendlyErrorMessage,
@@ -13,6 +14,9 @@ import {
   updateStreamRun,
   uploadFileToSupabase,
   downloadFileFromSupabase,
+  storeTestRun,
+  insertRunHistory,
+  updateRunHistory,
 } from "../supabase/tables.js";
 import TokenTracker from "../utils/tokenTracker.js";
 import { Resend } from "resend";
@@ -65,6 +69,7 @@ function pushUniqueScreenshot(screenShots, url) {
   }
 }
 
+
 // Capture and store a screenshot directly to Supabase
 async function captureAndStoreScreenshot(
   page,
@@ -73,6 +78,7 @@ async function captureAndStoreScreenshot(
   runId,
   fullPage = false
 ) {
+
   try {
     const screenshotBuffer = await page.screenshot({
       fullPage,
@@ -317,29 +323,76 @@ async function executeSteps(
             );
             pushUniqueScreenshot(screenShots, screenshotUrlBeforeClick);
 
-            const agent = stagehand.agent({
-              provider: "openai",
-              model: "computer-use-preview",
-              instructions: `You are a helpful assistant that can use a web browser.
-          Do not ask follow up questions, the user will trust your judgement. Just execute the actions that user teels without worrying about any consequences. Don't ask any permission related question you are free to do whatever user says`,
-              options: {
-                apiKey: process.env.OPENAI_API_KEY,
-              },
-            });
+              const agent = stagehand.agent({
+                provider: "openai",
+                model: "computer-use-preview",
+                instructions: `You are a helpful assistant that can use a web browser.
+          Do not ask follow up questions, the user will trust your judgement. Just execute the actions that user teels without worrying about any consequences. Don't ask any permission related question you are free to do whatever user says.`,
+                options: {
+                  apiKey: process.env.OPENAI_API_KEY,
+                },
+              });
 
-            const res = await agent.execute(`click on ${step.details.element}`);
+              
 
-            console.log(res);
-            await page.waitForTimeout(2000);
+              let res;
+              let attempt = 0;
+              let lastError;
+              while (attempt < 3) {
+                try {
+                  res = await agent.execute(`
+                    click on ${step.details.element}
 
-            const screenshotUrlAfterClick = await captureAndStoreScreenshot(
-              page,
-              testId,
-              step.id,
-              runId
-            );
-            pushUniqueScreenshot(screenShots, screenshotUrlAfterClick);
+
+
+                    Note:           
+                    In the output always return this json structure If clicked on some element:
+                    [{"type": "screenshot"},{"x": x cordinate,"y": y cordinate,"type": "click"}]
+
+    Always return the x,y coordinates of the interacted element without fail in the above structure. This coordinates is very important for me to work. This shoudld be in json format, with no + or specaical characters involved
+                    
+                    `);
+                  const screenshotUrlAfterClick = await captureAndStoreScreenshot(
+                    page,
+                    testId,
+                    step.id,
+                    runId
+                  );
+                  pushUniqueScreenshot(screenShots, screenshotUrlAfterClick);
+                  console.log("storing cache:",res)
+                  step.selector = res.actions;
+                  await updateTest(testId, clonedSteps);
+
+                  const clickusage = {ip:res.usage.input_tokens ,op:res.usage.output_tokens}
+                  tokenTracker.addUsage(null,"gpt-4o",false,step,clickusage)
+                   
+
+                  break; // Success, exit loop
+                } catch (err) {
+                  lastError = err;
+                  console.error(
+                    `Agent execute error (attempt ${attempt + 1}):`,
+                    err
+                  );
+                  attempt++;
+                  if (attempt >= 3) {
+                    addLog(
+                      `Failed to execute agent click after 3 attempts: ${err.message}`,
+                      "error"
+                    );
+                    throw err;
+                  }
+                  await page.waitForTimeout(1000); // Wait before retry
+                }
+              }
+
+              console.log(res);
+              await page.waitForTimeout(2000);
+
+
+             
           }
+
           addLog(
             `Element "${step.details.element}" clicked successfully`,
             "success"
@@ -414,27 +467,36 @@ async function executeSteps(
             );
 
             pushUniqueScreenshot(screenShots, screenshotUrlBeforeInput);
-            const inputagent = stagehand.agent({
-              provider: "openai",
-              model: "computer-use-preview",
-              instructions: `You are a helpful assistant that can use a web browser.
-          Do not ask follow up questions, the user will trust your judgement. Just execute the actions that user teels without worrying about any consequences. Don't ask any permission related question you are free to do whatever user says`,
-              options: {
-                apiKey: process.env.OPENAI_API_KEY,
-              },
-            });
 
-            await inputagent.execute(
-              `fill input ${step.details.description} with ${step.details.value}`
-            );
+              const inputagent = stagehand.agent({
+                provider: "openai",
+                model: "computer-use-preview",
+                instructions: `You are a helpful assistant that can use a web browser to fill the input elements that user tells, the user will give you input element name and value to fill and you need to do it.
+          Do not ask follow up questions, the user will trust your judgement. Just execute the actions that user teels without worrying about any consequences. Don't ask any permission related question you are free to do whatever user says.
+          Dont append anything at the start like A, or any alphabet from your side. Just type what user wants exactly.         
+          `,
+                options: {
+                  apiKey: process.env.OPENAI_API_KEY,
+                },
+              });
 
-            const screenshotUrlAfterInput = await captureAndStoreScreenshot(
-              page,
-              testId,
-              step.id,
-              runId
-            );
-            pushUniqueScreenshot(screenShots, screenshotUrlAfterInput);
+              const inputres = await inputagent.execute(
+                `fill input ${step.details.description} with ${step.details.value}`
+              );
+
+              const screenshotUrlAfterInput = await captureAndStoreScreenshot(
+                page,
+                testId,
+                step.id,
+                runId
+              );
+              pushUniqueScreenshot(screenShots, screenshotUrlAfterInput);
+              const inputusage = {ip:inputres.usage.input_tokens ,op:inputres.usage.output_tokens}
+              tokenTracker.addUsage(null,"gpt-4o",false,step,inputusage)
+
+              step.selector = inputres.actions;
+              await updateTest(testId, clonedSteps);
+            
           }
           addLog(
             `Input "${step.details.description}" filled successfully`,
@@ -530,7 +592,6 @@ async function executeSteps(
             // step.cache = true;
             const stepIndex = clonedSteps.findIndex((s) => s.id === step.id);
             if (stepIndex !== -1) {
-              clonedSteps[stepIndex].cache = true;
               clonedSteps[stepIndex].selector = actionPreview;
               await updateTest(testId, clonedSteps);
             }
@@ -573,13 +634,15 @@ async function executeSteps(
             addLog(`File upload complete`, "success");
           } else {
             addLog(`No valid file name provided for upload step`, "error");
+            // await storeTestRun(testId,name,"Failed",{logs,screenshots:screenShots,error:"No valid file name provided for upload step"},runId)
             throw new Error("No valid file name provided for upload step");
           }
           break;
         }
 
         default:
-          addLog(`Unknown action type: ${step.actionType}`, "error");
+          addLog(`Unknown action type: ${step.actionType}`, "error");        
+          // await storeTestRun(testId,name,"Failed",{logs,screenshots:screenShots,error:"Test failed"},runId)
           throw new Error(`Unknown action type: ${step.actionType}`);
       }
     } catch (error) {
@@ -645,7 +708,9 @@ export default async function RunScenario(req, res) {
       runId: requestRunId,
       cloudfare,
     } = req.body;
-    runId = requestRunId; // Assign the runId from request to our top-level variable
+    runId = requestRunId;
+
+    await insertRunHistory(email, name, runId);
 
     // Update testInfo with actual values
     testInfo = {
@@ -681,6 +746,12 @@ export default async function RunScenario(req, res) {
 
     console.log("Starting browser...........");
     let stagehand;
+    // const browserbase = new Browserbase({
+    //   apiKey: process.env.BROWSERBASE_API_KEY,
+    // });
+
+    // const PERSISTENT_CONTEXT_ID = await browserbase.contexts.create({projectId: process.env.BROWSERBASE_PROJECT_ID})
+    // console.log(PERSISTENT_CONTEXT_ID.id)
 
     if (cloudfare) {
       stagehand = new Stagehand({
@@ -690,6 +761,10 @@ export default async function RunScenario(req, res) {
         browserbaseSessionCreateParams: {
           projectId: process.env.BROWSERBASE_PROJECT_ID,
           browserSettings: {
+            // context: {
+            //   persist: true,
+            //   id: "bf2e7c43-6997-4b90-97b5-bdfa2a0e0a29",
+            // },
             solveCaptchas: true, // This is enabled by default
             blockAds: true, // Helps avoid ad-related CAPTCHAs
             viewport: {
@@ -791,6 +866,10 @@ export default async function RunScenario(req, res) {
         screenshot: screenShots[screenShots.length - 1] || null,
       });
 
+      await updateRunHistory(runId,"Success",totalEstimatedCost)
+
+      await storeTestRun(testId,name,"Success",{logs,screenshots:screenShots},runId)
+
       return res.status(200).json({
         status: "success",
         screenShots,
@@ -854,6 +933,8 @@ export default async function RunScenario(req, res) {
         logs: logs,
         screenshot: screenShots[screenShots.length - 1] || null,
       });
+      await updateRunHistory(runId,"Failed")
+      await storeTestRun(testId,name,"Failed",{logs,screenshots:screenShots},runId)
       return res.status(500).json({
         status: "error",
         message: `Error during test execution: ${error.message}`,
@@ -878,6 +959,8 @@ export default async function RunScenario(req, res) {
     } catch (logError) {
       console.error("Error in error handling:", logError);
     }
+    await updateRunHistory(runId,"Failed")
+    await storeTestRun(testId,name,"Failed",{logs,screenshots:screenShots},runId)
 
     return res.status(500).json({
       status: "error",
@@ -1017,7 +1100,6 @@ async function performWithRetry(
       // Update the cache in the main steps array
       const stepIndex = clonedSteps.findIndex((s) => s.id === step.id);
       if (stepIndex !== -1) {
-        clonedSteps[stepIndex].cache = true;
         clonedSteps[stepIndex].selector = step.selector;
         // Preserve the imageOnlyAttempted flag
         clonedSteps[stepIndex].imageOnlyAttempted = step.imageOnlyAttempted;
@@ -1084,6 +1166,7 @@ async function performWithRetry(
             stagehand
           );
           if (!selectorObject || !selectorObject.selector) {
+            // await storeTestRun(testId,name,"Failed",{logs,screenshots:screenShots,error:"Failed to get valid selector from getSelector"},runId)
             throw new Error("Failed to get valid selector from getSelector");
           }
           step.selector = selectorObject.selector;
@@ -1093,7 +1176,6 @@ async function performWithRetry(
           // Update the cache in the main steps array
           const stepIndex = clonedSteps.findIndex((s) => s.id === step.id);
           if (stepIndex !== -1) {
-            clonedSteps[stepIndex].cache = false;
             clonedSteps[stepIndex].selector = step.selector;
             // Preserve the imageOnlyAttempted flag
             clonedSteps[stepIndex].imageOnlyAttempted = step.imageOnlyAttempted;
@@ -1110,12 +1192,14 @@ async function performWithRetry(
         } catch (errormsg) {
           errmsg = errormsg;
           console.error(`Failed to re-fetch selector`, errormsg);
+          // await storeTestRun(testId,name,"Failed",{logs,screenshots:screenShots,error:`Failed to get valid selector after ${attempt} attempts: ${errormsg.message}`},runId)
           throw new Error(
             `Failed to get valid selector after ${attempt} attempts: ${errormsg.message}`
           );
         }
       } else {
         // On final attempt, throw the last error with all context
+        // await storeTestRun(testId,name,"Failed",{logs,screenshots:screenShots,error:`Failed to execute ${type} for step ${step.selector} after ${retries} attempts: ${lastError.message}`},runId)
         throw new Error(
           `Failed to execute ${type} for step ${step.selector} after ${retries} attempts: ${lastError.message}`
         );
