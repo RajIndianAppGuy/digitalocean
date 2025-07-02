@@ -1,7 +1,7 @@
 // Pricing information (per 1 million tokens, except embeddings which are per 1K tokens)
 const MODEL_PRICING = {
   "gpt-4o": {
-    input: 2.50,    // $2.50 per 1M input tokens
+    input: 5,    // $2.50 per 1M input tokens
     output: 10.00,  // $10.00 per 1M output tokens
     image: 7.65,    // $7.65 per 1M image tokens
   },
@@ -37,11 +37,25 @@ class TokenTracker {
     };
   }
 
-  addUsage(response, model, hasImage = false, stepInfo = null) {
-    if (response.data.usage) {
-      this.usage.promptTokens += response.data.usage.prompt_tokens || 0;
-      this.usage.completionTokens += response.data.usage.completion_tokens || 0;
-      this.usage.totalTokens += response.data.usage.total_tokens || 0;
+  addUsage(response, model, hasImage = false, stepInfo = null,agentusage) {
+    // Handle both axios response (response.data.usage) and OpenAI SDK response (response.usage)
+    let usage = 0;
+    if(response){
+    if (response.data && response.data.usage) {
+      // Axios response structure
+      usage = response.data.usage;
+    } else if (response.usage) {
+      // OpenAI SDK response structure
+      usage = response.usage;
+    }
+  }
+
+    
+
+    if (usage) {
+      this.usage.promptTokens += usage.prompt_tokens || 0;
+      this.usage.completionTokens += usage.completion_tokens || 0;
+      this.usage.totalTokens += usage.total_tokens || 0;
 
       if (model === 'text-embedding-3-small' || model === 'text-embedding-ada-002') {
         this.usage.embeddingModel = model;
@@ -55,8 +69,15 @@ class TokenTracker {
         const inputDivisor = isEmbedding ? 1000 : 1000000;
         const outputDivisor = isEmbedding ? 1000 : 1000000;
 
-        const inputCost = (response.data.usage.prompt_tokens / inputDivisor) * MODEL_PRICING[model].input;
-        const outputCost = (response.data.usage.completion_tokens / outputDivisor) * MODEL_PRICING[model].output;
+        let input_usage = 0
+        let output_usage = 0
+        if(agentusage){
+          usage.prompt_tokens += agentusage.ip
+          usage.completion_tokens += agentusage.op
+        }
+
+        const inputCost = (usage.prompt_tokens / inputDivisor) * MODEL_PRICING[model].input;
+        const outputCost = (usage.completion_tokens / outputDivisor) * MODEL_PRICING[model].output;
         let imageCost = 0;
         if (hasImage) {
           this.usage.imageTokens += 85;
@@ -68,7 +89,7 @@ class TokenTracker {
         if (stepInfo) {
           this.usage.stepBreakdown.push({
             step: stepInfo,
-            tokens: response.data.usage.total_tokens || 0,
+            tokens: usage.total_tokens || 0,
             cost: inputCost + outputCost + imageCost,
             model: model
           });
