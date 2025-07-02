@@ -487,11 +487,11 @@ async function executeSteps(
 
               const actions = inputres.actions
 
-              await page.keyboard.press('Control+A');
-              await page.keyboard.press('Backspace');
+              // await page.keyboard.press('Control+A');
+              // await page.keyboard.press('Backspace');
 
-              await page.mouse.click(actions[1].x,actions[1].y)
-              await page.keyboard.type(step.details.value)
+              // await page.mouse.click(actions[1].x,actions[1].y)
+              // await page.keyboard.type(step.details.value)
 
               const screenshotUrlAfterInput = await captureAndStoreScreenshot(
                 page,
