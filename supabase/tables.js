@@ -393,6 +393,103 @@ export async function createStreamRun(runId) {
   }
 }
 
+export async function insertRunHistory(email, testName, runId) {
+  try {
+    // Fetch user's current workspace
+    const { data: userDetails, error: userError } = await supabase
+      .from("user_details")
+      .select("current_workspace")
+      .eq("email", email)
+      .single();
+
+    if (userError || !userDetails) {
+      throw userError || new Error("User not found");
+    }
+
+    // Fetch workspace id by name
+    const { data: workspace, error: wsError } = await supabase
+      .from("workspaces")
+      .select("id")
+      .eq("name", userDetails.current_workspace)
+      .eq("email", email)
+      .single();
+
+    if (wsError || !workspace) {
+      throw wsError || new Error("Workspace not found");
+    }
+
+    const { data, error } = await supabase
+      .from("run_history")
+      .insert({
+        user_email: email,
+        test_name: testName,
+        status: "Running",
+        started: new Date().toISOString(),
+        run_id: runId,
+        associated_workspaceid: workspace.id
+      })
+      .select();
+
+    if (error) throw error;
+    return data[0];
+  } catch (error) {
+    console.error("Error inserting run history:", error);
+    throw error;
+  }
+}
+
+export async function updateRunHistory(
+  id,
+  status,
+  cost
+) {
+  try {
+    const { data, error } = await supabase
+      .from("run_history")
+      .update({
+        status: status,
+        cost: cost,
+        ended: new Date().toISOString(),
+      })
+      .eq("run_id", id)
+      .select();
+
+    if (error) throw error;
+    return data[0];
+  } catch (error) {
+    console.error("Error updating run history:", error);
+    throw error;
+  }
+}
+
+
+export async function storeTestRun(testId, testName, status, data, runId) {
+  const createdAt = new Date().toISOString();
+  try {
+    const { data: result, error } = await supabase
+      .from("test_runs")
+      .insert({
+        run_id: runId,
+        created_at: createdAt,
+        test_id: testId,
+        test_name: testName,
+        status: status,
+        data: data
+      })
+      .select();
+
+    if (error) {
+      console.error("Error storing test run:", error);
+      throw error;
+    }
+
+    return result;
+  } catch (error) {
+    console.error("Error in storeTestRun:", error);
+    throw error;
+  }
+}
+
 export async function updateStreamRun(runId, updateData) {
   try {
     const { data, error } = await supabase
