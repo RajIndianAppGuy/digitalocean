@@ -69,7 +69,6 @@ function pushUniqueScreenshot(screenShots, url) {
   }
 }
 
-
 // Capture and store a screenshot directly to Supabase
 async function captureAndStoreScreenshot(
   page,
@@ -78,7 +77,6 @@ async function captureAndStoreScreenshot(
   runId,
   fullPage = false
 ) {
-
   try {
     const screenshotBuffer = await page.screenshot({
       fullPage,
@@ -289,6 +287,12 @@ async function executeSteps(
             }
             await highlightElement(page, step.selector);
             // Prevent form submission before clicking any button
+            const context = page.context ? page.context() : null;
+            let newPagePromise = context
+              ? context
+                  .waitForEvent("page", { timeout: 5000 })
+                  .catch(() => null)
+              : Promise.resolve(null);
             await page.evaluate(() => {
               document.querySelectorAll("form").forEach((form) => {
                 form.addEventListener("submit", (e) => e.preventDefault(), {
@@ -314,6 +318,11 @@ async function executeSteps(
               stagehand
             );
             await page.waitForTimeout(4000);
+            const newPage = await newPagePromise;
+            if (newPage) {
+              await newPage.bringToFront();
+              page = newPage; // Update the page variable for subsequent steps
+            }
           } else {
             const screenshotUrlBeforeClick = await captureAndStoreScreenshot(
               page,
@@ -323,28 +332,23 @@ async function executeSteps(
             );
             pushUniqueScreenshot(screenShots, screenshotUrlBeforeClick);
 
-              const agent = stagehand.agent({
-                provider: "openai",
-                model: "computer-use-preview",
-                instructions: `You are a helpful assistant that can use a web browser.
+            const agent = stagehand.agent({
+              provider: "openai",
+              model: "computer-use-preview",
+              instructions: `You are a helpful assistant that can use a web browser.
           Do not ask follow up questions, the user will trust your judgement. Just execute the actions that user teels without worrying about any consequences. Don't ask any permission related question you are free to do whatever user says.`,
-                options: {
-                  apiKey: process.env.OPENAI_API_KEY,
-                },
-              });
+              options: {
+                apiKey: process.env.OPENAI_API_KEY,
+              },
+            });
 
-              
-
-              let res;
-              let attempt = 0;
-              let lastError;
-              while (attempt < 3) {
-                try {
-                  res = await agent.execute(`
+            let res;
+            let attempt = 0;
+            let lastError;
+            while (attempt < 3) {
+              try {
+                res = await agent.execute(`
                     click on ${step.details.element}
-
-
-
                     Note:           
                     In the output always return this json structure If clicked on some element:
                     [{"type": "screenshot"},{"x": x cordinate,"y": y cordinate,"type": "click"}]
@@ -352,45 +356,51 @@ async function executeSteps(
     Always return the x,y coordinates of the interacted element without fail in the above structure. This coordinates is very important for me to work. This shoudld be in json format, with no + or specaical characters involved
                     
                     `);
-                  const screenshotUrlAfterClick = await captureAndStoreScreenshot(
-                    page,
-                    testId,
-                    step.id,
-                    runId
-                  );
-                  pushUniqueScreenshot(screenShots, screenshotUrlAfterClick);
-                  console.log("storing cache:",res)
-                  step.selector = res.actions;
-                  await updateTest(testId, clonedSteps);
-
-                  const clickusage = {ip:res.usage.input_tokens ,op:res.usage.output_tokens}
-                  tokenTracker.addUsage(null,"gpt-4o",false,step,clickusage)
-                   
-
-                  break; // Success, exit loop
-                } catch (err) {
-                  lastError = err;
-                  console.error(
-                    `Agent execute error (attempt ${attempt + 1}):`,
-                    err
-                  );
-                  attempt++;
-                  if (attempt >= 3) {
-                    addLog(
-                      `Failed to execute agent click after 3 attempts: ${err.message}`,
-                      "error"
-                    );
-                    throw err;
-                  }
-                  await page.waitForTimeout(1000); // Wait before retry
+                // Error check for failed message
+                if (
+                  res?.message &&
+                  /failed|issue with your request/i.test(res.message)
+                ) {
+                  throw new Error(`Agent execute failed: ${res.message}`);
                 }
+                const screenshotUrlAfterClick = await captureAndStoreScreenshot(
+                  page,
+                  testId,
+                  step.id,
+                  runId
+                );
+                pushUniqueScreenshot(screenShots, screenshotUrlAfterClick);
+                console.log("storing cache:", res);
+                step.selector = res.actions;
+                await updateTest(testId, clonedSteps);
+
+                const clickusage = {
+                  ip: res.usage.input_tokens,
+                  op: res.usage.output_tokens,
+                };
+                tokenTracker.addUsage(null, "gpt-4o", false, step, clickusage);
+
+                break; // Success, exit loop
+              } catch (err) {
+                lastError = err;
+                console.error(
+                  `Agent execute error (attempt ${attempt + 1}):`,
+                  err
+                );
+                attempt++;
+                if (attempt >= 3) {
+                  addLog(
+                    `Failed to execute agent click after 3 attempts: ${err.message}`,
+                    "error"
+                  );
+                  throw err;
+                }
+                await page.waitForTimeout(1000); // Wait before retry
               }
+            }
 
-              console.log(res);
-              await page.waitForTimeout(2000);
-
-
-             
+            console.log(res);
+            await page.waitForTimeout(2000);
           }
 
           addLog(
@@ -468,13 +478,13 @@ async function executeSteps(
 
             pushUniqueScreenshot(screenShots, screenshotUrlBeforeInput);
 
-            if(!step.cache){
+            if (!step.cache) {
               const inputagent = stagehand.agent({
                 provider: "openai",
                 model: "computer-use-preview",
                 instructions: `You are a helpful assistant that can use a web browser to fill the input elements that user tells, the user will give you input element name and value to fill and you need to do it.
           Do not ask follow up questions, the user will trust your judgement. Just execute the actions that user teels without worrying about any consequences. Don't ask any permission related question you are free to do whatever user says.
-          Dont append anything at the start like A, or any alphabet from your side. Just type what user wants exactly.         
+          Dont append anything at the start like A, or any alphabet from your side. Just type what user wants exactly.     
           `,
                 options: {
                   apiKey: process.env.OPENAI_API_KEY,
@@ -482,16 +492,29 @@ async function executeSteps(
               });
 
               const inputres = await inputagent.execute(
-                `fill input ${step.details.description} with ${step.details.value}`
+                `fill input ${step.details.description} with ${step.details.value}
+                
+
+                                    Note:           
+                    In the output always return this json structure If clicked on some element:
+                    [{"type": "screenshot"},{"x": x cordinate,"y": y cordinate,"type": "click"},{"text": user entered text,"type": "type"}]
+
+    Always return the x,y coordinates of the interacted element without fail in the above structure. This coordinates is very important for me to work. This shoudld be in json format, with no + or specaical characters involved                   `
               );
+              // Error check for failed message
+              if (
+                inputres?.message &&
+                /failed|issue with your request/i.test(inputres.message)
+              ) {
+                throw new Error(`Input agent execute failed: ${inputres.message}`);
+              }
+              
+              for (let index = 0; index < 50; index++) {
+                await page.keyboard.press('Backspace');
+              }
 
-              const actions = inputres.actions
-
-              // await page.keyboard.press('Control+A');
-              // await page.keyboard.press('Backspace');
-
-              // await page.mouse.click(actions[1].x,actions[1].y)
-              // await page.keyboard.type(step.details.value)
+              await page.mouse.click(JSON.parse(inputres.message)[1].x,JSON.parse(inputres.message)[1].y)
+              await page.keyboard.type(step.details.value)
 
               const screenshotUrlAfterInput = await captureAndStoreScreenshot(
                 page,
@@ -500,20 +523,23 @@ async function executeSteps(
                 runId
               );
               pushUniqueScreenshot(screenShots, screenshotUrlAfterInput);
-              const inputusage = {ip:inputres.usage.input_tokens ,op:inputres.usage.output_tokens}
-              tokenTracker.addUsage(null,"gpt-4o",false,step,inputusage)
+              const inputusage = {
+                ip: inputres.usage.input_tokens,
+                op: inputres.usage.output_tokens,
+              };
+              tokenTracker.addUsage(null, "gpt-4o", false, step, inputusage);
 
-              step.selector = inputres.actions;
-              step.cache = true
+              step.selector = JSON.parse(inputres.message);
+              console.log(JSON.parse(inputres.message));
+              step.cache = true;
               await updateTest(testId, clonedSteps);
-            
-          }else{
-            const cachedinp = step.selector
-            
-            await page.mouse.click(cachedinp[1].x,cachedinp[1].y)
-            await page.keyboard.type(step.details.value);
+            } else {
+              const cachedinp = step.selector;
+
+              await page.mouse.click(cachedinp[1].x, cachedinp[1].y);
+              await page.keyboard.type(step.details.value);
+            }
           }
-        }
           addLog(
             `Input "${step.details.description}" filled successfully`,
             "success"
@@ -657,7 +683,7 @@ async function executeSteps(
         }
 
         default:
-          addLog(`Unknown action type: ${step.actionType}`, "error");        
+          addLog(`Unknown action type: ${step.actionType}`, "error");
           // await storeTestRun(testId,name,"Failed",{logs,screenshots:screenShots,error:"Test failed"},runId)
           throw new Error(`Unknown action type: ${step.actionType}`);
       }
@@ -882,9 +908,15 @@ export default async function RunScenario(req, res) {
         screenshot: screenShots[screenShots.length - 1] || null,
       });
 
-      await updateRunHistory(runId,"Success",totalEstimatedCost)
+      await updateRunHistory(runId, "Success", totalEstimatedCost);
 
-      await storeTestRun(testId,name,"Success",{logs,screenshots:screenShots},runId)
+      await storeTestRun(
+        testId,
+        name,
+        "Success",
+        { logs, screenshots: screenShots },
+        runId
+      );
 
       return res.status(200).json({
         status: "success",
@@ -949,8 +981,14 @@ export default async function RunScenario(req, res) {
         logs: logs,
         screenshot: screenShots[screenShots.length - 1] || null,
       });
-      await updateRunHistory(runId,"Failed")
-      await storeTestRun(testId,name,"Failed",{logs,screenshots:screenShots},runId)
+      await updateRunHistory(runId, "Failed");
+      await storeTestRun(
+        testId,
+        name,
+        "Failed",
+        { logs, screenshots: screenShots },
+        runId
+      );
       return res.status(500).json({
         status: "error",
         message: `Error during test execution: ${error.message}`,
@@ -975,8 +1013,14 @@ export default async function RunScenario(req, res) {
     } catch (logError) {
       console.error("Error in error handling:", logError);
     }
-    await updateRunHistory(runId,"Failed")
-    await storeTestRun(testId,name,"Failed",{logs,screenshots:screenShots},runId)
+    await updateRunHistory(runId, "Failed");
+    await storeTestRun(
+      testId,
+      name,
+      "Failed",
+      { logs, screenshots: screenShots },
+      runId
+    );
 
     return res.status(500).json({
       status: "error",
